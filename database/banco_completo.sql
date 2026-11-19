@@ -1,0 +1,1381 @@
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - BANCO COMPLETO (versão final)
+-- Integrantes: Arthur Freire e Luís Melo
+-- Um único script com tudo, nesta ordem: criação e inserção, índices,
+-- visões, funções, procedimentos e triggers. É o mesmo conteúdo dos
+-- arquivos 01 a 06 desta pasta, sem os SELECTs de exemplo.
+-- No MySQL Workbench ou no DBeaver, execute como script (Alt+X no DBeaver).
+-- ================================================================
+SET NAMES utf8mb4;
+
+-- ################################################################
+-- 01_criacao_e_insercao.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel (minimundo: Hotel)
+-- Integrantes: Arthur Freire e Luís Melo
+-- Script ÚNICO de CRIAÇÃO e INSERÇÃO do banco hotel_db (MySQL 8)
+-- Parte 1: criação das tabelas (constraints CHECK, DEFAULT, UNIQUE,
+--          AUTO_INCREMENT, ON UPDATE CASCADE e ON DELETE SET NULL)
+-- Parte 2: inserção dos dados de exemplo (30 ou mais tuplas por tabela)
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+
+-- ================================================================
+-- PARTE 1: CRIAÇÃO
+-- ================================================================
+DROP DATABASE IF EXISTS hotel_db;
+CREATE DATABASE hotel_db
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_0900_ai_ci;
+
+USE hotel_db;
+
+CREATE TABLE PESSOA (
+    cpf             CHAR(11)     PRIMARY KEY,
+    nome            VARCHAR(120) NOT NULL,
+    data_nascimento DATE         NOT NULL,
+    email           VARCHAR(120) UNIQUE,
+    logradouro      VARCHAR(120) NOT NULL,
+    numero_endereco VARCHAR(10)  NOT NULL,
+    bairro          VARCHAR(80)  NOT NULL,
+    cidade          VARCHAR(80)  NOT NULL,
+    uf              CHAR(2)      NOT NULL,
+    cep             CHAR(8)      NOT NULL,
+    CONSTRAINT ck_pessoa_cpf CHECK (cpf REGEXP '^[0-9]{11}$'),
+    CONSTRAINT ck_pessoa_cep CHECK (cep REGEXP '^[0-9]{8}$'),
+    CONSTRAINT ck_pessoa_email CHECK (email IS NULL OR email LIKE '%@%.%'),
+    CONSTRAINT ck_pessoa_uf CHECK (uf IN
+        ('AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'))
+) ENGINE=InnoDB;
+
+CREATE TABLE TELEFONE_PESSOA (
+    cpf      CHAR(11)    NOT NULL,
+    telefone VARCHAR(20) NOT NULL,
+    CONSTRAINT pk_telefone PRIMARY KEY (cpf, telefone),
+    CONSTRAINT fk_telefone_pessoa FOREIGN KEY (cpf) REFERENCES PESSOA (cpf)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT ck_telefone_formato CHECK (telefone REGEXP '^[0-9]{10,11}$')
+) ENGINE=InnoDB;
+
+CREATE TABLE HOSPEDE (
+    cpf           CHAR(11)     PRIMARY KEY,
+    data_cadastro DATE         NOT NULL DEFAULT (CURRENT_DATE),
+    observacoes   VARCHAR(255),
+    CONSTRAINT fk_hospede_pessoa FOREIGN KEY (cpf) REFERENCES PESSOA (cpf)
+        ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE FUNCIONARIO (
+    cpf            CHAR(11)      PRIMARY KEY,
+    matricula      VARCHAR(20)   NOT NULL UNIQUE,
+    cargo          VARCHAR(50)   NOT NULL,
+    data_admissao  DATE          NOT NULL DEFAULT (CURRENT_DATE),
+    salario        DECIMAL(10,2) NOT NULL,
+    cpf_supervisor CHAR(11),
+    CONSTRAINT fk_funcionario_pessoa FOREIGN KEY (cpf) REFERENCES PESSOA (cpf)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_funcionario_supervisor FOREIGN KEY (cpf_supervisor) REFERENCES FUNCIONARIO (cpf)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT ck_funcionario_salario CHECK (salario > 0)
+    -- A regra "um funcionário não pode supervisionar a si mesmo" não foi
+    -- declarada como CHECK: o MySQL 8 proíbe CHECK em coluna usada por FK
+    -- com ação referencial (ON UPDATE CASCADE / ON DELETE SET NULL), erro 3823.
+    -- Ela será implementada com trigger na Etapa 05.
+) ENGINE=InnoDB;
+
+CREATE TABLE TIPO_QUARTO (
+    id_tipo      INT           PRIMARY KEY AUTO_INCREMENT,
+    nome         VARCHAR(50)   NOT NULL UNIQUE,
+    capacidade   SMALLINT      NOT NULL DEFAULT 2,
+    valor_diaria DECIMAL(10,2) NOT NULL,
+    descricao    VARCHAR(255)  NOT NULL,
+    CONSTRAINT ck_tipo_capacidade CHECK (capacidade > 0),
+    CONSTRAINT ck_tipo_valor CHECK (valor_diaria >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE QUARTO (
+    numero  VARCHAR(10) PRIMARY KEY,
+    andar   SMALLINT    NOT NULL,
+    status  VARCHAR(20) NOT NULL DEFAULT 'DISPONIVEL',
+    id_tipo INT         NOT NULL,
+    CONSTRAINT fk_quarto_tipo FOREIGN KEY (id_tipo) REFERENCES TIPO_QUARTO (id_tipo)
+        ON UPDATE CASCADE,
+    CONSTRAINT ck_quarto_andar CHECK (andar >= 0),
+    CONSTRAINT ck_quarto_status CHECK (status IN ('DISPONIVEL','OCUPADO','LIMPEZA','MANUTENCAO'))
+) ENGINE=InnoDB;
+
+CREATE TABLE RESERVA (
+    id_reserva       INT         PRIMARY KEY AUTO_INCREMENT,
+    cpf_hospede      CHAR(11)    NOT NULL,
+    numero_quarto    VARCHAR(10) NOT NULL,
+    data_reserva     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    entrada_prevista DATE        NOT NULL,
+    saida_prevista   DATE        NOT NULL,
+    qtd_hospedes     SMALLINT    NOT NULL DEFAULT 1,
+    status           VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+    observacao       VARCHAR(255),
+    CONSTRAINT fk_reserva_hospede FOREIGN KEY (cpf_hospede) REFERENCES HOSPEDE (cpf)
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_reserva_quarto FOREIGN KEY (numero_quarto) REFERENCES QUARTO (numero)
+        ON UPDATE CASCADE,
+    CONSTRAINT ck_reserva_periodo CHECK (saida_prevista > entrada_prevista),
+    CONSTRAINT ck_reserva_qtd CHECK (qtd_hospedes > 0),
+    CONSTRAINT ck_reserva_status CHECK (status IN ('PENDENTE','CONFIRMADA','CANCELADA','EM_HOSPEDAGEM','FINALIZADA'))
+) ENGINE=InnoDB;
+
+CREATE TABLE HOSPEDAGEM (
+    id_hospedagem           INT         PRIMARY KEY AUTO_INCREMENT,
+    id_reserva              INT         NOT NULL UNIQUE,
+    cpf_funcionario_checkin CHAR(11),
+    checkin_real            TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    checkout_real           TIMESTAMP   NULL,
+    qtd_presentes           SMALLINT    NOT NULL DEFAULT 1,
+    status                  VARCHAR(20) NOT NULL DEFAULT 'ABERTA',
+    CONSTRAINT fk_hospedagem_reserva FOREIGN KEY (id_reserva) REFERENCES RESERVA (id_reserva)
+        ON UPDATE CASCADE,
+    CONSTRAINT fk_hospedagem_funcionario FOREIGN KEY (cpf_funcionario_checkin) REFERENCES FUNCIONARIO (cpf)
+        ON UPDATE CASCADE ON DELETE SET NULL,
+    CONSTRAINT ck_hospedagem_saida CHECK (checkout_real IS NULL OR checkout_real > checkin_real),
+    CONSTRAINT ck_hospedagem_qtd CHECK (qtd_presentes > 0),
+    CONSTRAINT ck_hospedagem_status CHECK (status IN ('ABERTA','ENCERRADA'))
+) ENGINE=InnoDB;
+
+CREATE TABLE PAGAMENTO (
+    id_pagamento    INT           PRIMARY KEY AUTO_INCREMENT,
+    id_reserva      INT           NOT NULL,
+    data_criacao    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    valor_total     DECIMAL(10,2) NOT NULL,
+    forma_pagamento VARCHAR(30)   NOT NULL DEFAULT 'PIX',
+    status          VARCHAR(20)   NOT NULL DEFAULT 'PENDENTE',
+    CONSTRAINT fk_pagamento_reserva FOREIGN KEY (id_reserva) REFERENCES RESERVA (id_reserva)
+        ON UPDATE CASCADE,
+    CONSTRAINT ck_pagamento_valor CHECK (valor_total > 0),
+    CONSTRAINT ck_pagamento_forma CHECK (forma_pagamento IN ('PIX','DINHEIRO','DEBITO','CREDITO','TRANSFERENCIA')),
+    CONSTRAINT ck_pagamento_status CHECK (status IN ('PENDENTE','PARCIAL','PAGO','ESTORNADO','CANCELADO'))
+) ENGINE=InnoDB;
+
+CREATE TABLE PARCELA (
+    id_pagamento    INT           NOT NULL,
+    numero_parcela  SMALLINT      NOT NULL,
+    data_vencimento DATE          NOT NULL,
+    valor           DECIMAL(10,2) NOT NULL,
+    data_pagamento  TIMESTAMP     NULL,
+    status          VARCHAR(20)   NOT NULL DEFAULT 'PENDENTE',
+    CONSTRAINT pk_parcela PRIMARY KEY (id_pagamento, numero_parcela),
+    CONSTRAINT fk_parcela_pagamento FOREIGN KEY (id_pagamento) REFERENCES PAGAMENTO (id_pagamento)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT ck_parcela_numero CHECK (numero_parcela > 0),
+    CONSTRAINT ck_parcela_valor CHECK (valor > 0),
+    CONSTRAINT ck_parcela_status CHECK (status IN ('PENDENTE','PAGA','VENCIDA','CANCELADA'))
+) ENGINE=InnoDB;
+
+CREATE TABLE SERVICO (
+    id_servico  INT           PRIMARY KEY AUTO_INCREMENT,
+    nome        VARCHAR(80)   NOT NULL UNIQUE,
+    descricao   VARCHAR(255)  NOT NULL,
+    valor_atual DECIMAL(10,2) NOT NULL,
+    ativo       BOOLEAN       NOT NULL DEFAULT TRUE,
+    CONSTRAINT ck_servico_valor CHECK (valor_atual >= 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE CONSUMO_SERVICO (
+    id_hospedagem  INT           NOT NULL,
+    id_servico     INT           NOT NULL,
+    data_hora      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    quantidade     SMALLINT      NOT NULL DEFAULT 1,
+    valor_unitario DECIMAL(10,2) NOT NULL,
+    observacao     VARCHAR(255),
+    CONSTRAINT pk_consumo PRIMARY KEY (id_hospedagem, id_servico, data_hora),
+    CONSTRAINT fk_consumo_hospedagem FOREIGN KEY (id_hospedagem) REFERENCES HOSPEDAGEM (id_hospedagem)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT fk_consumo_servico FOREIGN KEY (id_servico) REFERENCES SERVICO (id_servico)
+        ON UPDATE CASCADE,
+    CONSTRAINT ck_consumo_quantidade CHECK (quantidade > 0),
+    CONSTRAINT ck_consumo_valor CHECK (valor_unitario >= 0)
+) ENGINE=InnoDB;
+
+-- ================================================================
+-- PARTE 2: INSERÇÃO DE DADOS
+-- Datas em torno de 04/11/2026: histórico de abril a outubro,
+-- hospedagens em andamento e reservas futuras (nov/2026 a jan/2027).
+-- Todas as tabelas têm 30 ou mais tuplas.
+-- ================================================================
+USE hotel_db;
+
+INSERT INTO PESSOA (cpf, nome, data_nascimento, email, logradouro, numero_endereco, bairro, cidade, uf, cep) VALUES
+('10000000001','Ana Beatriz Lima','1990-03-12','ana.lima@email.com','Rua das Flores','101','Boa Viagem','Recife','PE','51020000'),
+('10000000002','Bruno Carvalho Souza','1988-07-05','bruno.souza@email.com','Avenida Conde da Boa Vista','450','Boa Vista','Recife','PE','50060000'),
+('10000000003','Camila Ferreira Rocha','1995-11-23','camila.rocha@email.com','Rua do Sol','78','Santo Antonio','Recife','PE','50010000'),
+('10000000004','Daniel Moreira Pinto','1982-01-30','daniel.pinto@email.com','Avenida Beira Mar','1200','Pina','Recife','PE','51110000'),
+('10000000005','Eduarda Nogueira Alves','1997-05-18','eduarda.alves@email.com','Rua Doutor Joao Santos','33','Gracas','Recife','PE','52011000'),
+('10000000006','Felipe Andrade Costa','1991-09-09','felipe.costa@email.com','Rua Nova','215','Centro','Olinda','PE','53020000'),
+('10000000007','Gabriela Martins Silva','1986-12-02','gabriela.silva@email.com','Avenida Getulio Vargas','980','Bairro Novo','Olinda','PE','53030000'),
+('10000000008','Henrique Barbosa Dias','1993-04-27','henrique.dias@email.com','Rua Sete de Setembro','56','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('10000000009','Isabela Cardoso Ramos','1999-08-14','isabela.ramos@email.com','Avenida Bernardo Vieira de Melo','320','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('10000000010','Joao Pedro Teixeira','1984-02-21','joao.teixeira@email.com','Rua Marechal Deodoro','145','Centro','Caruaru','PE','55010000'),
+('10000000011','Karina Almeida Freitas','1992-06-08','karina.freitas@email.com','Rua das Flores','102','Boa Viagem','Recife','PE','51020000'),
+('10000000012','Lucas Mendes Araujo','1987-10-16','lucas.araujo@email.com','Avenida Conde da Boa Vista','451','Boa Vista','Recife','PE','50060000'),
+('10000000013','Mariana Duarte Campos','1996-03-03','mariana.campos@email.com','Rua do Sol','79','Santo Antonio','Recife','PE','50010000'),
+('10000000014','Nicolas Ribeiro Gomes','1989-07-29','nicolas.gomes@email.com','Avenida Beira Mar','1201','Pina','Recife','PE','51110000'),
+('10000000015','Olivia Santana Peixoto','1994-11-11','olivia.peixoto@email.com','Rua Doutor Joao Santos','34','Gracas','Recife','PE','52011000'),
+('10000000016','Paulo Henrique Viana','1981-05-25','paulo.viana@email.com','Rua Nova','216','Centro','Olinda','PE','53020000'),
+('10000000017','Queila Monteiro Brito','1998-09-07','queila.brito@email.com','Avenida Getulio Vargas','981','Bairro Novo','Olinda','PE','53030000'),
+('10000000018','Rafael Siqueira Lopes','1990-12-19','rafael.lopes@email.com','Rua Sete de Setembro','57','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('10000000019','Sabrina Correia Melo','1985-04-04','sabrina.melo@email.com','Avenida Bernardo Vieira de Melo','321','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('10000000020','Thiago Barros Fonseca','1993-08-22','thiago.fonseca@email.com','Rua Marechal Deodoro','146','Centro','Caruaru','PE','55010000'),
+('10000000021','Ursula Prado Antunes','1979-02-13','ursula.antunes@email.com','Rua das Flores','103','Boa Viagem','Recife','PE','51020000'),
+('10000000022','Vinicius Tavares Leal','1991-06-26','vinicius.leal@email.com','Avenida Conde da Boa Vista','452','Boa Vista','Recife','PE','50060000'),
+('10000000023','Wesley Franco Amaral','1983-10-01','wesley.amaral@email.com','Rua do Sol','80','Santo Antonio','Recife','PE','50010000'),
+('10000000024','Yasmin Coelho Bastos','1996-01-15','yasmin.bastos@email.com','Avenida Beira Mar','1202','Pina','Recife','PE','51110000'),
+('10000000025','Zeca Oliveira Pires','1988-05-06','zeca.pires@email.com','Rua Doutor Joao Santos','35','Gracas','Recife','PE','52011000'),
+('10000000026','Amanda Rezende Faria','1994-09-28','amanda.faria@email.com','Rua Nova','217','Centro','Olinda','PE','53020000'),
+('10000000027','Bernardo Queiroz Neves','1980-03-17','bernardo.neves@email.com','Avenida Getulio Vargas','982','Bairro Novo','Olinda','PE','53030000'),
+('10000000028','Carla Mesquita Padilha','1997-07-24','carla.padilha@email.com','Rua Sete de Setembro','58','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('10000000029','Diego Vasconcelos Sa','1986-11-09','diego.sa@email.com','Avenida Bernardo Vieira de Melo','322','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('10000000030','Elaine Furtado Braga','1992-02-02','elaine.braga@email.com','Rua Marechal Deodoro','147','Centro','Caruaru','PE','55010000'),
+('20000000001','Fabio Cunha Moraes','1975-04-10','fabio.moraes@hotel.com','Rua das Flores','200','Boa Viagem','Recife','PE','51020000'),
+('20000000002','Giovana Pacheco Reis','1980-08-19','giovana.reis@hotel.com','Avenida Conde da Boa Vista','500','Boa Vista','Recife','PE','50060000'),
+('20000000003','Hugo Sampaio Vieira','1978-12-05','hugo.vieira@hotel.com','Rua do Sol','120','Santo Antonio','Recife','PE','50010000'),
+('20000000004','Ingrid Bezerra Lacerda','1983-02-27','ingrid.lacerda@hotel.com','Avenida Beira Mar','1300','Pina','Recife','PE','51110000'),
+('20000000005','Jonas Aguiar Portela','1985-06-14','jonas.portela@hotel.com','Rua Doutor Joao Santos','60','Gracas','Recife','PE','52011000'),
+('20000000006','Kelly Nunes Bandeira','1990-10-31','kelly.bandeira@hotel.com','Rua Nova','300','Centro','Olinda','PE','53020000'),
+('20000000007','Leandro Xavier Guedes','1987-01-08','leandro.guedes@hotel.com','Avenida Getulio Vargas','1000','Bairro Novo','Olinda','PE','53030000'),
+('20000000008','Marcela Pontes Guimaraes','1992-05-21','marcela.guimaraes@hotel.com','Rua Sete de Setembro','90','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('20000000009','Natan Rios Salgado','1989-09-03','natan.salgado@hotel.com','Avenida Bernardo Vieira de Melo','400','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('20000000010','Otavio Lins Caldeira','1994-11-26','otavio.caldeira@hotel.com','Rua Marechal Deodoro','210','Centro','Caruaru','PE','55010000'),
+('20000000011','Priscila Damasceno Rocha','1991-03-15','priscila.rocha@hotel.com','Rua das Flores','201','Boa Viagem','Recife','PE','51020000'),
+('20000000012','Ricardo Solano Vieira','1986-07-07','ricardo.solano@hotel.com','Avenida Conde da Boa Vista','501','Boa Vista','Recife','PE','50060000'),
+('20000000013','Simone Bittencourt Maia','1982-11-18','simone.maia@hotel.com','Rua do Sol','121','Santo Antonio','Recife','PE','50010000'),
+('20000000014','Tadeu Marinho Feitosa','1977-04-23','tadeu.feitosa@hotel.com','Avenida Beira Mar','1301','Pina','Recife','PE','51110000'),
+('20000000015','Valeria Cordeiro Assis','1993-08-30','valeria.assis@hotel.com','Rua Doutor Joao Santos','61','Gracas','Recife','PE','52011000'),
+('20000000016','Wagner Uchoa Pimentel','1988-12-12','wagner.pimentel@hotel.com','Rua Nova','301','Centro','Olinda','PE','53020000'),
+('20000000017','Ximena Batista Lobo','1995-02-06','ximena.lobo@hotel.com','Avenida Getulio Vargas','1001','Bairro Novo','Olinda','PE','53030000'),
+('20000000018','Yuri Galvao Tenorio','1984-06-20','yuri.tenorio@hotel.com','Rua Sete de Setembro','91','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('20000000019','Zilda Menezes Barroso','1979-10-09','zilda.barroso@hotel.com','Avenida Bernardo Vieira de Melo','401','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('20000000020','Arthur Peixoto Cavalcanti','1996-01-29','arthur.cavalcanti@hotel.com','Rua Marechal Deodoro','211','Centro','Caruaru','PE','55010000'),
+('20000000021','Bianca Torres Modesto','1990-05-11','bianca.modesto@hotel.com','Rua das Flores','202','Boa Viagem','Recife','PE','51020000'),
+('20000000022','Caio Estevam Rangel','1987-09-24','caio.rangel@hotel.com','Avenida Conde da Boa Vista','502','Boa Vista','Recife','PE','50060000'),
+('20000000023','Debora Fialho Marques','1981-03-02','debora.marques@hotel.com','Rua do Sol','122','Santo Antonio','Recife','PE','50010000'),
+('20000000024','Elias Quintela Serpa','1992-07-16','elias.serpa@hotel.com','Avenida Beira Mar','1302','Pina','Recife','PE','51110000'),
+('20000000025','Flavia Rabelo Camargo','1989-11-04','flavia.camargo@hotel.com','Rua Doutor Joao Santos','62','Gracas','Recife','PE','52011000'),
+('20000000026','Gustavo Nobre Pessoa','1994-02-17','gustavo.pessoa@hotel.com','Rua Nova','302','Centro','Olinda','PE','53020000'),
+('20000000027','Helena Vilela Soares','1985-06-28','helena.soares@hotel.com','Avenida Getulio Vargas','1002','Bairro Novo','Olinda','PE','53030000'),
+('20000000028','Igor Trindade Bulhoes','1991-10-13','igor.bulhoes@hotel.com','Rua Sete de Setembro','92','Centro','Jaboatao dos Guararapes','PE','54410000'),
+('20000000029','Juliana Moura Sampaio','1997-01-25','juliana.sampaio@hotel.com','Avenida Bernardo Vieira de Melo','402','Piedade','Jaboatao dos Guararapes','PE','54410010'),
+('20000000030','Kleber Assuncao Ferraz','1983-05-08','kleber.ferraz@hotel.com','Rua Marechal Deodoro','212','Centro','Caruaru','PE','55010000');
+
+INSERT INTO TELEFONE_PESSOA (cpf, telefone) VALUES
+('10000000001','81991000001'),('10000000001','8133210001'),
+('10000000002','81991000002'),('10000000003','81991000003'),
+('10000000004','81991000004'),('10000000005','81991000005'),
+('10000000006','81991000006'),('10000000007','81991000007'),
+('10000000008','81991000008'),('10000000009','81991000009'),
+('10000000010','81991000010'),('10000000011','81991000011'),
+('10000000012','81991000012'),('10000000013','81991000013'),
+('10000000014','81991000014'),('10000000015','81991000015'),
+('10000000016','81991000016'),('10000000017','81991000017'),
+('10000000018','81991000018'),('10000000019','81991000019'),
+('10000000020','81991000020'),('10000000021','81991000021'),
+('10000000022','81991000022'),('10000000023','81991000023'),
+('10000000024','81991000024'),('10000000025','81991000025'),
+('10000000026','81991000026'),('10000000027','81991000027'),
+('10000000028','81991000028'),('10000000029','81991000029'),
+('10000000030','81991000030'),('20000000001','81992000001'),
+('20000000001','8133220001'),('20000000002','81992000002'),
+('20000000003','81992000003'),('20000000004','81992000004'),
+('20000000005','81992000005'),('20000000006','81992000006'),
+('20000000007','81992000007'),('20000000008','81992000008'),
+('20000000009','81992000009'),('20000000010','81992000010');
+
+INSERT INTO HOSPEDE (cpf, data_cadastro, observacoes) VALUES
+('10000000001','2025-01-10','Prefere andar alto'),
+('10000000002','2025-01-18',NULL),
+('10000000003','2025-02-02','Alergia a lactose'),
+('10000000004','2025-02-14',NULL),
+('10000000005','2025-02-25','Cliente fidelidade ouro'),
+('10000000006','2025-03-05',NULL),
+('10000000007','2025-03-19','Viaja a trabalho'),
+('10000000008','2025-04-01',NULL),
+('10000000009','2025-04-12','Solicita berco'),
+('10000000010','2025-04-27',NULL),
+('10000000011','2025-05-08','Prefere quarto silencioso'),
+('10000000012','2025-05-21',NULL),
+('10000000013','2025-06-03','Vegetariana'),
+('10000000014','2025-06-15',NULL),
+('10000000015','2025-06-29','Cliente fidelidade prata'),
+('10000000016','2025-07-11',NULL),
+('10000000017','2025-07-23','Viaja com pet'),
+('10000000018','2025-08-04',NULL),
+('10000000019','2025-08-17','Prefere vista mar'),
+('10000000020','2025-08-30',NULL),
+('10000000021','2025-09-09','Necessita quarto acessivel'),
+('10000000022','2025-09-22',NULL),
+('10000000023','2025-10-05','Check-in tardio frequente'),
+('10000000024','2025-10-18',NULL),
+('10000000025','2025-10-30','Cliente corporativo'),
+('10000000026','2025-11-12',NULL),
+('10000000027','2025-11-25','Prefere cama extra'),
+('10000000028','2025-12-06',NULL),
+('10000000029','2025-12-19','Indicado por parceiro'),
+('10000000030','2026-01-07','Primeira hospedagem'),
+('20000000006','2026-02-03','Funcionario (recepcao) tambem hospede'),
+('20000000028','2026-03-09','Funcionario (marketing) tambem hospede');
+
+INSERT INTO FUNCIONARIO (cpf, matricula, cargo, data_admissao, salario, cpf_supervisor) VALUES
+('20000000001','MAT0001','Gerente Geral','2015-02-01',12000.00,NULL),
+('20000000002','MAT0002','Gerente de Hospedagem','2016-03-15',8500.00,'20000000001'),
+('20000000003','MAT0003','Gerente de Operacoes','2016-08-01',8200.00,'20000000001'),
+('20000000004','MAT0004','Supervisor de Recepcao','2017-01-20',5200.00,'20000000002'),
+('20000000005','MAT0005','Supervisor de Governanca','2017-05-10',5000.00,'20000000003'),
+('20000000006','MAT0006','Recepcionista','2018-02-05',2600.00,'20000000004'),
+('20000000007','MAT0007','Recepcionista','2018-04-18',2600.00,'20000000004'),
+('20000000008','MAT0008','Recepcionista','2018-09-03',2650.00,'20000000004'),
+('20000000009','MAT0009','Recepcionista','2019-01-14',2700.00,'20000000004'),
+('20000000010','MAT0010','Recepcionista','2019-06-24',2700.00,'20000000004'),
+('20000000011','MAT0011','Camareira','2019-08-12',2100.00,'20000000005'),
+('20000000012','MAT0012','Camareira','2019-11-04',2100.00,'20000000005'),
+('20000000013','MAT0013','Camareira','2020-02-17',2150.00,'20000000005'),
+('20000000014','MAT0014','Auxiliar de Manutencao','2020-07-06',2400.00,'20000000005'),
+('20000000015','MAT0015','Auxiliar de Manutencao','2020-10-19',2400.00,'20000000005'),
+('20000000016','MAT0016','Cozinheiro','2021-01-11',3100.00,'20000000003'),
+('20000000017','MAT0017','Auxiliar de Cozinha','2021-03-22',2000.00,'20000000016'),
+('20000000018','MAT0018','Garcom','2021-06-07',2050.00,'20000000016'),
+('20000000019','MAT0019','Garcom','2021-09-13',2050.00,'20000000016'),
+('20000000020','MAT0020','Analista Financeiro','2021-11-29',4300.00,'20000000001'),
+('20000000021','MAT0021','Assistente Financeiro','2022-02-14',2800.00,'20000000020'),
+('20000000022','MAT0022','Analista de Reservas','2022-05-02',3600.00,'20000000002'),
+('20000000023','MAT0023','Assistente de Reservas','2022-08-15',2500.00,'20000000022'),
+('20000000024','MAT0024','Seguranca','2022-10-24',2700.00,'20000000003'),
+('20000000025','MAT0025','Seguranca','2023-01-09',2700.00,'20000000003'),
+('20000000026','MAT0026','Mensageiro','2023-04-17',1900.00,'20000000004'),
+('20000000027','MAT0027','Mensageiro','2023-07-03',1900.00,'20000000004'),
+('20000000028','MAT0028','Analista de Marketing','2023-09-18',3900.00,'20000000001'),
+('20000000029','MAT0029','Assistente de RH','2024-01-08',2900.00,'20000000001'),
+('20000000030','MAT0030','Estagiario de TI','2024-03-25',1600.00,'20000000001');
+
+INSERT INTO TIPO_QUARTO (nome, capacidade, valor_diaria, descricao) VALUES
+('Standard Solteiro',1,180.00,'Quarto simples com cama de solteiro e ar-condicionado'),
+('Standard Casal',2,240.00,'Quarto simples com cama de casal e frigobar'),
+('Standard Triplo',3,300.00,'Quarto simples com cama de casal e cama auxiliar'),
+('Superior Solteiro',1,220.00,'Quarto reformado com escrivaninha de trabalho'),
+('Superior Casal',2,290.00,'Quarto reformado com cama queen e varanda'),
+('Superior Triplo',3,350.00,'Quarto reformado com tres camas e varanda'),
+('Luxo Solteiro',1,320.00,'Quarto amplo com enxoval premium'),
+('Luxo Casal',2,420.00,'Quarto amplo com cama king e banheira'),
+('Luxo Triplo',3,480.00,'Quarto amplo com tres camas e sala de estar'),
+('Suite Master',2,650.00,'Suite com sala integrada e hidromassagem'),
+('Suite Presidencial',4,1200.00,'Suite com dois ambientes e servico de mordomo'),
+('Suite Familia',5,900.00,'Suite com dois quartos conjugados'),
+('Studio Compacto',2,200.00,'Studio com cozinha compacta'),
+('Studio Executivo',2,260.00,'Studio com estacao de trabalho e internet dedicada'),
+('Apartamento Simples',2,210.00,'Apartamento com sala e cozinha equipada'),
+('Apartamento Duplo',4,380.00,'Apartamento de dois quartos com cozinha'),
+('Chale Jardim',2,400.00,'Chale isolado com vista para o jardim'),
+('Chale Piscina',4,560.00,'Chale com acesso direto a piscina'),
+('Bangalo Beira Mar',4,720.00,'Bangalo a beira mar com deck privativo'),
+('Quarto Acessivel',2,250.00,'Quarto adaptado para cadeirante com barras de apoio'),
+('Quarto Familiar',5,520.00,'Quarto amplo com beliche e cama de casal'),
+('Quarto Economico',1,150.00,'Quarto compacto sem frigobar'),
+('Quarto Compartilhado',6,90.00,'Quarto coletivo com seis camas e armarios'),
+('Cobertura Panoramica',4,1500.00,'Cobertura com terraco e vista 360 graus'),
+('Suite Vista Mar',2,780.00,'Suite com janela panoramica para o mar'),
+('Suite Vista Jardim',2,600.00,'Suite com janela panoramica para o jardim'),
+('Quarto Pet Friendly',2,330.00,'Quarto adaptado para hospedes com animais'),
+('Quarto Executivo',1,340.00,'Quarto individual com sala de reuniao compacta'),
+('Loft Duplex',4,690.00,'Loft de dois andares com escada interna'),
+('Suite Lua de Mel',2,850.00,'Suite tematica com decoracao romantica');
+
+INSERT INTO QUARTO (numero, andar, status, id_tipo) VALUES
+('101',1,'DISPONIVEL',1),
+('102',1,'OCUPADO',2),
+('103',1,'DISPONIVEL',3),
+('104',1,'LIMPEZA',4),
+('105',1,'OCUPADO',5),
+('106',1,'DISPONIVEL',6),
+('107',1,'DISPONIVEL',7),
+('108',1,'MANUTENCAO',8),
+('109',1,'DISPONIVEL',9),
+('110',1,'OCUPADO',10),
+('111',1,'DISPONIVEL',11),
+('112',1,'DISPONIVEL',12),
+('113',1,'DISPONIVEL',13),
+('114',1,'OCUPADO',14),
+('115',1,'DISPONIVEL',15),
+('201',2,'DISPONIVEL',16),
+('202',2,'DISPONIVEL',17),
+('203',2,'DISPONIVEL',18),
+('204',2,'DISPONIVEL',19),
+('205',2,'DISPONIVEL',20),
+('206',2,'DISPONIVEL',21),
+('207',2,'MANUTENCAO',22),
+('208',2,'DISPONIVEL',23),
+('209',2,'DISPONIVEL',24),
+('210',2,'DISPONIVEL',25),
+('211',2,'DISPONIVEL',26),
+('212',2,'DISPONIVEL',27),
+('213',2,'DISPONIVEL',28),
+('214',2,'OCUPADO',29),
+('215',2,'DISPONIVEL',30),
+('301',3,'OCUPADO',2),
+('302',3,'OCUPADO',5),
+('303',3,'DISPONIVEL',8),
+('304',3,'DISPONIVEL',10),
+('305',3,'OCUPADO',11),
+('306',3,'DISPONIVEL',13),
+('307',3,'DISPONIVEL',16),
+('308',3,'OCUPADO',19),
+('309',3,'LIMPEZA',23),
+('310',3,'DISPONIVEL',25),
+('401',4,'DISPONIVEL',3),
+('402',4,'OCUPADO',6),
+('403',4,'DISPONIVEL',9),
+('404',4,'DISPONIVEL',12),
+('405',4,'DISPONIVEL',14),
+('406',4,'LIMPEZA',17),
+('407',4,'DISPONIVEL',21),
+('408',4,'DISPONIVEL',24),
+('409',4,'DISPONIVEL',26),
+('410',4,'DISPONIVEL',29);
+
+INSERT INTO SERVICO (nome, descricao, valor_atual, ativo) VALUES
+('Cafe da manha','Buffet servido das 6h as 10h',45.00,TRUE),
+('Almoco','Buffet servido das 12h as 15h',70.00,TRUE),
+('Jantar','Menu a la carte servido das 19h as 23h',90.00,TRUE),
+('Room service','Entrega de refeicoes no quarto',25.00,TRUE),
+('Lavanderia','Lavagem e secagem de pecas por quilo',35.00,TRUE),
+('Passadoria','Servico de passar roupas por peca',12.00,TRUE),
+('Estacionamento','Vaga coberta por diaria',30.00,TRUE),
+('Transfer aeroporto','Traslado de ida ou volta ao aeroporto',120.00,TRUE),
+('Late checkout','Permanencia no quarto ate as 18h',80.00,TRUE),
+('Early checkin','Entrada antecipada a partir das 9h',80.00,TRUE),
+('Frigobar','Consumo de itens do frigobar',18.00,TRUE),
+('Agua mineral','Garrafa de agua mineral de 500 ml',6.00,TRUE),
+('Refrigerante','Lata de refrigerante de 350 ml',8.00,TRUE),
+('Cerveja','Long neck servida no bar ou no quarto',14.00,TRUE),
+('Vinho','Garrafa de vinho selecionado pela casa',95.00,TRUE),
+('Espumante','Garrafa de espumante nacional',110.00,TRUE),
+('Massagem relaxante','Sessao de 50 minutos no spa',180.00,TRUE),
+('Massagem esportiva','Sessao de 50 minutos com foco muscular',200.00,TRUE),
+('Sauna','Acesso avulso a sauna seca',60.00,TRUE),
+('Piscina aquecida','Acesso avulso a piscina aquecida',40.00,TRUE),
+('Academia','Acesso diario a academia',25.00,TRUE),
+('Aluguel de bicicleta','Bicicleta disponivel por periodo de 4 horas',35.00,TRUE),
+('Passeio de barco','Passeio guiado com duracao de 2 horas',150.00,TRUE),
+('City tour','Roteiro guiado pelos pontos turisticos',130.00,TRUE),
+('Babysitter','Acompanhamento infantil por hora',60.00,TRUE),
+('Sala de reuniao','Locacao de sala equipada por hora',90.00,TRUE),
+('Impressao de documentos','Impressao em preto e branco por pagina',2.00,TRUE),
+('Cama extra','Cama adicional instalada no quarto',75.00,TRUE),
+('Taxa de pet','Acomodacao de animal de pequeno porte por diaria',50.00,TRUE),
+('Decoracao romantica','Montagem tematica com flores e velas',220.00,FALSE);
+
+INSERT INTO RESERVA (id_reserva, cpf_hospede, numero_quarto, data_reserva, entrada_prevista, saida_prevista, qtd_hospedes, status, observacao) VALUES
+(1,'10000000009','307','2026-03-08 10:38:00','2026-04-06','2026-04-11',3,'FINALIZADA',NULL),
+(2,'10000000020','112','2026-03-09 21:03:00','2026-04-14','2026-04-18',1,'FINALIZADA',NULL),
+(3,'10000000002','307','2026-03-18 14:16:00','2026-04-01','2026-04-06',1,'FINALIZADA',NULL),
+(4,'10000000014','404','2026-03-24 13:27:00','2026-04-08','2026-04-10',3,'FINALIZADA',NULL),
+(5,'10000000024','103','2026-03-27 09:11:00','2026-04-11','2026-04-16',1,'FINALIZADA',NULL),
+(6,'10000000007','309','2026-03-28 10:10:00','2026-05-06','2026-05-08',1,'FINALIZADA',NULL),
+(7,'10000000018','410','2026-04-20 08:08:00','2026-05-02','2026-05-04',3,'FINALIZADA',NULL),
+(8,'10000000011','307','2026-04-21 08:19:00','2026-05-11','2026-05-15',3,'FINALIZADA',NULL),
+(9,'10000000022','208','2026-04-21 20:09:00','2026-05-20','2026-05-25',1,'FINALIZADA',NULL),
+(10,'10000000005','211','2026-04-24 08:58:00','2026-05-14','2026-05-16',1,'FINALIZADA',NULL),
+(11,'10000000013','209','2026-04-25 11:12:00','2026-04-30','2026-05-06',2,'FINALIZADA',NULL),
+(12,'10000000003','113','2026-04-27 16:53:00','2026-05-19','2026-05-25',1,'FINALIZADA',NULL),
+(13,'10000000012','203','2026-04-30 08:13:00','2026-05-21','2026-05-27',3,'FINALIZADA',NULL),
+(14,'10000000016','112','2026-04-30 14:00:00','2026-05-20','2026-05-23',1,'CANCELADA','Cancelada pelo hospede'),
+(15,'10000000015','206','2026-05-13 13:06:00','2026-06-18','2026-06-24',3,'FINALIZADA',NULL),
+(16,'20000000006','207','2026-05-14 16:59:00','2026-05-23','2026-05-28',1,'FINALIZADA',NULL),
+(17,'10000000007','211','2026-05-17 08:54:00','2026-06-10','2026-06-15',1,'FINALIZADA',NULL),
+(18,'10000000019','206','2026-05-18 09:29:00','2026-05-26','2026-05-28',1,'FINALIZADA',NULL),
+(19,'20000000028','403','2026-05-19 19:16:00','2026-06-27','2026-07-03',3,'FINALIZADA',NULL),
+(20,'10000000016','203','2026-05-29 20:24:00','2026-06-25','2026-07-01',2,'FINALIZADA',NULL),
+(21,'10000000019','214','2026-05-31 14:42:00','2026-07-10','2026-07-15',3,'FINALIZADA',NULL),
+(22,'10000000006','301','2026-06-22 11:49:00','2026-07-25','2026-07-31',1,'FINALIZADA',NULL),
+(23,'10000000025','103','2026-07-06 21:16:00','2026-08-12','2026-08-16',3,'FINALIZADA',NULL),
+(24,'10000000027','209','2026-07-08 09:08:00','2026-08-17','2026-08-21',1,'FINALIZADA',NULL),
+(25,'10000000021','108','2026-07-09 08:35:00','2026-08-08','2026-08-14',2,'FINALIZADA',NULL),
+(26,'10000000029','305','2026-07-10 21:48:00','2026-08-12','2026-08-15',2,'FINALIZADA',NULL),
+(27,'10000000021','211','2026-07-23 14:00:00','2026-08-12','2026-08-15',1,'CANCELADA','Cancelada pelo hospede'),
+(28,'10000000017','307','2026-08-01 19:32:00','2026-08-15','2026-08-21',3,'FINALIZADA',NULL),
+(29,'10000000023','111','2026-08-04 20:21:00','2026-08-13','2026-08-16',1,'FINALIZADA',NULL),
+(30,'10000000030','111','2026-08-15 09:22:00','2026-09-16','2026-09-19',2,'FINALIZADA',NULL),
+(31,'10000000004','202','2026-09-06 13:54:00','2026-09-12','2026-09-15',2,'FINALIZADA',NULL),
+(32,'10000000010','402','2026-09-07 18:25:00','2026-10-05','2026-10-10',2,'FINALIZADA',NULL),
+(33,'10000000028','103','2026-09-21 16:44:00','2026-10-01','2026-10-05',3,'FINALIZADA',NULL),
+(34,'10000000002','302','2026-10-04 18:05:00','2026-10-29','2026-11-04',2,'EM_HOSPEDAGEM',NULL),
+(35,'10000000007','115','2026-10-05 10:00:00','2026-11-16','2026-11-20',1,'CONFIRMADA',NULL),
+(36,'10000000012','308','2026-10-07 16:07:00','2026-10-31','2026-11-06',3,'EM_HOSPEDAGEM',NULL),
+(37,'10000000019','211','2026-10-08 09:00:00','2026-11-24','2026-11-29',2,'CONFIRMADA',NULL),
+(38,'10000000004','102','2026-10-08 18:40:00','2026-10-29','2026-11-07',2,'EM_HOSPEDAGEM',NULL),
+(39,'10000000014','110','2026-10-11 11:17:00','2026-10-31','2026-11-06',1,'EM_HOSPEDAGEM',NULL),
+(40,'10000000003','214','2026-10-11 12:00:00','2026-12-01','2026-12-07',3,'CONFIRMADA',NULL),
+(41,'20000000006','304','2026-10-14 14:00:00','2026-12-05','2026-12-11',2,'CONFIRMADA',NULL),
+(42,'10000000009','105','2026-10-14 20:49:00','2026-10-30','2026-11-06',1,'EM_HOSPEDAGEM',NULL),
+(43,'10000000029','301','2026-10-16 14:04:00','2026-11-03','2026-11-12',1,'EM_HOSPEDAGEM',NULL),
+(44,'10000000025','112','2026-10-17 09:00:00','2026-12-15','2026-12-18',1,'CONFIRMADA',NULL),
+(45,'10000000007','305','2026-10-17 13:16:00','2026-10-30','2026-11-07',2,'EM_HOSPEDAGEM',NULL),
+(46,'10000000017','402','2026-10-18 15:35:00','2026-11-01','2026-11-07',3,'EM_HOSPEDAGEM',NULL),
+(47,'10000000019','114','2026-10-19 13:10:00','2026-11-01','2026-11-10',1,'EM_HOSPEDAGEM',NULL),
+(48,'10000000011','402','2026-10-20 09:00:00','2026-12-21','2026-12-25',1,'CONFIRMADA',NULL),
+(49,'10000000024','214','2026-10-23 11:29:00','2026-11-02','2026-11-10',1,'EM_HOSPEDAGEM',NULL),
+(50,'10000000014','304','2026-10-31 13:00:00','2026-12-26','2026-12-31',1,'PENDENTE',NULL),
+(51,'10000000027','204','2026-10-31 14:00:00','2026-11-20','2026-11-23',1,'CANCELADA','Cancelada pelo hospede'),
+(52,'20000000028','211','2026-11-01 11:00:00','2027-01-03','2027-01-09',1,'PENDENTE',NULL),
+(53,'10000000030','201','2026-11-02 18:00:00','2027-01-12','2027-01-16',2,'PENDENTE',NULL),
+(54,'10000000022','111','2026-11-03 13:00:00','2027-01-16','2027-01-19',1,'PENDENTE',NULL);
+
+INSERT INTO HOSPEDAGEM (id_hospedagem, id_reserva, cpf_funcionario_checkin, checkin_real, checkout_real, qtd_presentes, status) VALUES
+(1,3,'20000000004','2026-04-01 15:10:00','2026-04-06 11:46:00',1,'ENCERRADA'),
+(2,1,'20000000009','2026-04-06 17:07:00','2026-04-11 11:20:00',3,'ENCERRADA'),
+(3,4,'20000000007','2026-04-08 15:59:00','2026-04-10 10:11:00',3,'ENCERRADA'),
+(4,5,'20000000009','2026-04-11 16:36:00','2026-04-16 10:29:00',1,'ENCERRADA'),
+(5,2,'20000000006','2026-04-14 15:43:00','2026-04-18 10:51:00',1,'ENCERRADA'),
+(6,11,'20000000008','2026-04-30 15:26:00','2026-05-06 10:54:00',2,'ENCERRADA'),
+(7,7,'20000000006','2026-05-02 15:32:00','2026-05-04 10:43:00',3,'ENCERRADA'),
+(8,6,'20000000004','2026-05-06 17:05:00','2026-05-08 10:06:00',1,'ENCERRADA'),
+(9,8,'20000000009','2026-05-11 15:12:00','2026-05-15 11:13:00',3,'ENCERRADA'),
+(10,10,'20000000006','2026-05-14 16:26:00','2026-05-16 10:52:00',1,'ENCERRADA'),
+(11,12,'20000000007','2026-05-19 16:58:00','2026-05-25 10:28:00',1,'ENCERRADA'),
+(12,9,'20000000006','2026-05-20 15:33:00','2026-05-25 10:58:00',1,'ENCERRADA'),
+(13,13,'20000000009','2026-05-21 14:52:00','2026-05-27 11:05:00',3,'ENCERRADA'),
+(14,16,'20000000009','2026-05-23 16:34:00','2026-05-28 10:21:00',1,'ENCERRADA'),
+(15,18,'20000000006','2026-05-26 15:58:00','2026-05-28 10:13:00',1,'ENCERRADA'),
+(16,17,'20000000009','2026-06-10 16:19:00','2026-06-15 11:48:00',1,'ENCERRADA'),
+(17,15,'20000000004','2026-06-18 17:57:00','2026-06-24 11:40:00',3,'ENCERRADA'),
+(18,20,'20000000008','2026-06-25 15:42:00','2026-07-01 10:36:00',2,'ENCERRADA'),
+(19,19,'20000000010','2026-06-27 16:39:00','2026-07-03 11:36:00',3,'ENCERRADA'),
+(20,21,'20000000010','2026-07-10 15:13:00','2026-07-15 10:51:00',3,'ENCERRADA'),
+(21,22,'20000000006','2026-07-25 15:18:00','2026-07-31 11:43:00',1,'ENCERRADA'),
+(22,25,'20000000007','2026-08-08 15:46:00','2026-08-14 11:09:00',2,'ENCERRADA'),
+(23,26,'20000000007','2026-08-12 17:29:00','2026-08-15 11:49:00',2,'ENCERRADA'),
+(24,23,'20000000009','2026-08-12 17:44:00','2026-08-16 10:31:00',3,'ENCERRADA'),
+(25,29,'20000000009','2026-08-13 16:53:00','2026-08-16 10:00:00',1,'ENCERRADA'),
+(26,28,'20000000009','2026-08-15 17:31:00','2026-08-21 10:53:00',3,'ENCERRADA'),
+(27,24,'20000000008','2026-08-17 14:45:00','2026-08-21 10:03:00',1,'ENCERRADA'),
+(28,31,'20000000008','2026-09-12 16:31:00','2026-09-15 10:48:00',2,'ENCERRADA'),
+(29,30,'20000000010','2026-09-16 15:26:00','2026-09-19 10:49:00',2,'ENCERRADA'),
+(30,33,'20000000006','2026-10-01 15:17:00','2026-10-05 11:09:00',3,'ENCERRADA'),
+(31,32,'20000000004','2026-10-05 14:20:00','2026-10-10 10:52:00',2,'ENCERRADA'),
+(32,38,'20000000004','2026-10-29 14:11:00',NULL,2,'ABERTA'),
+(33,34,'20000000010','2026-10-29 16:07:00',NULL,2,'ABERTA'),
+(34,45,'20000000010','2026-10-30 14:08:00',NULL,2,'ABERTA'),
+(35,42,'20000000009','2026-10-30 16:26:00',NULL,1,'ABERTA'),
+(36,36,'20000000007','2026-10-31 16:14:00',NULL,3,'ABERTA'),
+(37,39,'20000000007','2026-10-31 17:47:00',NULL,1,'ABERTA'),
+(38,46,'20000000010','2026-11-01 16:40:00',NULL,3,'ABERTA'),
+(39,47,'20000000009','2026-11-01 17:46:00',NULL,1,'ABERTA'),
+(40,49,'20000000010','2026-11-02 15:44:00',NULL,1,'ABERTA'),
+(41,43,'20000000007','2026-11-03 14:43:00',NULL,1,'ABERTA');
+
+INSERT INTO PAGAMENTO (id_pagamento, id_reserva, data_criacao, valor_total, forma_pagamento, status) VALUES
+(1,1,'2026-03-08 10:38:00',1900.0,'CREDITO','PAGO'),
+(2,2,'2026-03-09 21:03:00',3600.0,'DEBITO','PAGO'),
+(3,3,'2026-03-18 14:16:00',1900.0,'DINHEIRO','PAGO'),
+(4,4,'2026-03-24 13:27:00',1800.0,'TRANSFERENCIA','PAGO'),
+(5,5,'2026-03-27 09:11:00',1500.0,'PIX','PAGO'),
+(6,6,'2026-03-28 10:10:00',180.0,'CREDITO','PARCIAL'),
+(7,7,'2026-04-20 08:08:00',1380.0,'DEBITO','PAGO'),
+(8,8,'2026-04-21 08:19:00',1520.0,'DINHEIRO','PAGO'),
+(9,9,'2026-04-21 20:09:00',450.0,'TRANSFERENCIA','PAGO'),
+(10,10,'2026-04-24 08:58:00',1200.0,'PIX','PAGO'),
+(11,11,'2026-04-25 11:12:00',9000.0,'CREDITO','PAGO'),
+(12,12,'2026-04-27 16:53:00',1200.0,'DEBITO','PAGO'),
+(13,13,'2026-04-30 08:13:00',3360.0,'DINHEIRO','PAGO'),
+(14,14,'2026-04-30 14:00:00',2700.0,'TRANSFERENCIA','CANCELADO'),
+(15,15,'2026-05-13 13:06:00',3120.0,'PIX','PAGO'),
+(16,16,'2026-05-14 16:59:00',750.0,'CREDITO','PAGO'),
+(17,17,'2026-05-17 08:54:00',3000.0,'DEBITO','PARCIAL'),
+(18,18,'2026-05-18 09:29:00',1040.0,'DINHEIRO','PARCIAL'),
+(19,19,'2026-05-19 19:16:00',2880.0,'TRANSFERENCIA','PAGO'),
+(20,20,'2026-05-29 20:24:00',3360.0,'PIX','PAGO'),
+(21,21,'2026-05-31 14:42:00',3450.0,'CREDITO','PARCIAL'),
+(22,22,'2026-06-22 11:49:00',1440.0,'DEBITO','PARCIAL'),
+(23,23,'2026-07-06 21:16:00',1200.0,'DINHEIRO','PARCIAL'),
+(24,24,'2026-07-08 09:08:00',6000.0,'TRANSFERENCIA','PAGO'),
+(25,25,'2026-07-09 08:35:00',2520.0,'PIX','PAGO'),
+(26,26,'2026-07-10 21:48:00',3600.0,'CREDITO','PAGO'),
+(27,27,'2026-07-23 14:00:00',1800.0,'DEBITO','CANCELADO'),
+(28,28,'2026-08-01 19:32:00',2280.0,'DINHEIRO','PAGO'),
+(29,29,'2026-08-04 20:21:00',3600.0,'TRANSFERENCIA','PAGO'),
+(30,30,'2026-08-15 09:22:00',3600.0,'PIX','PARCIAL'),
+(31,31,'2026-09-06 13:54:00',1200.0,'CREDITO','PAGO'),
+(32,32,'2026-09-07 18:25:00',1750.0,'DEBITO','PAGO'),
+(33,33,'2026-09-21 16:44:00',1200.0,'DINHEIRO','PAGO'),
+(34,34,'2026-10-04 18:05:00',1740.0,'TRANSFERENCIA','PARCIAL'),
+(35,35,'2026-10-05 10:00:00',840.0,'PIX','PAGO'),
+(36,36,'2026-10-07 16:07:00',4320.0,'CREDITO','PARCIAL'),
+(37,37,'2026-10-08 09:00:00',3000.0,'DEBITO','PARCIAL'),
+(38,38,'2026-10-08 18:40:00',2160.0,'DINHEIRO','PARCIAL'),
+(39,39,'2026-10-11 11:17:00',3900.0,'TRANSFERENCIA','PARCIAL'),
+(40,40,'2026-10-11 12:00:00',4140.0,'PIX','PARCIAL'),
+(41,41,'2026-10-14 14:00:00',3900.0,'CREDITO','PARCIAL'),
+(42,42,'2026-10-14 20:49:00',2030.0,'DEBITO','PARCIAL'),
+(43,43,'2026-10-16 14:04:00',2160.0,'DINHEIRO','PARCIAL'),
+(44,44,'2026-10-17 09:00:00',2700.0,'TRANSFERENCIA','PARCIAL'),
+(45,45,'2026-10-17 13:16:00',9600.0,'PIX','PARCIAL'),
+(46,46,'2026-10-18 15:35:00',2100.0,'CREDITO','PARCIAL'),
+(47,47,'2026-10-19 13:10:00',2340.0,'DEBITO','PARCIAL'),
+(48,48,'2026-10-20 09:00:00',1400.0,'DINHEIRO','PARCIAL'),
+(49,49,'2026-10-23 11:29:00',5520.0,'TRANSFERENCIA','PARCIAL'),
+(50,50,'2026-10-31 13:00:00',3250.0,'PIX','PENDENTE'),
+(51,51,'2026-10-31 14:00:00',2160.0,'CREDITO','CANCELADO'),
+(52,52,'2026-11-01 11:00:00',3600.0,'DEBITO','PENDENTE'),
+(53,53,'2026-11-02 18:00:00',1520.0,'DINHEIRO','PENDENTE'),
+(54,54,'2026-11-03 13:00:00',3600.0,'TRANSFERENCIA','PENDENTE');
+
+INSERT INTO PARCELA (id_pagamento, numero_parcela, data_vencimento, valor, data_pagamento, status) VALUES
+(1,1,'2026-04-06',950.0,'2026-04-04 12:46:00','PAGA'),
+(1,2,'2026-05-06',950.0,'2026-05-03 10:07:00','PAGA'),
+(2,1,'2026-04-14',1200.0,'2026-04-14 09:49:00','PAGA'),
+(2,2,'2026-05-14',1200.0,'2026-05-11 15:42:00','PAGA'),
+(2,3,'2026-06-13',1200.0,'2026-06-13 09:11:00','PAGA'),
+(3,1,'2026-04-01',950.0,'2026-03-31 11:54:00','PAGA'),
+(3,2,'2026-05-01',950.0,'2026-05-01 16:01:00','PAGA'),
+(4,1,'2026-04-08',900.0,'2026-04-08 15:39:00','PAGA'),
+(4,2,'2026-05-08',900.0,'2026-05-07 18:33:00','PAGA'),
+(5,1,'2026-04-11',750.0,'2026-04-09 13:11:00','PAGA'),
+(5,2,'2026-05-11',750.0,'2026-05-08 17:09:00','PAGA'),
+(6,1,'2026-05-06',90.0,'2026-05-06 15:46:00','PAGA'),
+(6,2,'2026-06-05',90.0,NULL,'VENCIDA'),
+(7,1,'2026-05-02',690.0,'2026-05-01 13:54:00','PAGA'),
+(7,2,'2026-06-01',690.0,'2026-05-30 12:04:00','PAGA'),
+(8,1,'2026-05-11',760.0,'2026-05-08 16:17:00','PAGA'),
+(8,2,'2026-06-10',760.0,'2026-06-07 15:17:00','PAGA'),
+(9,1,'2026-05-20',450.0,'2026-05-19 11:40:00','PAGA'),
+(10,1,'2026-05-14',600.0,'2026-05-13 10:27:00','PAGA'),
+(10,2,'2026-06-13',600.0,'2026-06-10 16:28:00','PAGA'),
+(11,1,'2026-04-30',3000.0,'2026-04-29 10:18:00','PAGA'),
+(11,2,'2026-05-30',3000.0,'2026-05-30 14:53:00','PAGA'),
+(11,3,'2026-06-29',3000.0,'2026-06-28 13:19:00','PAGA'),
+(12,1,'2026-05-19',600.0,'2026-05-16 18:42:00','PAGA'),
+(12,2,'2026-06-18',600.0,'2026-06-15 16:08:00','PAGA'),
+(13,1,'2026-05-21',1120.0,'2026-05-19 11:04:00','PAGA'),
+(13,2,'2026-06-20',1120.0,'2026-06-20 12:13:00','PAGA'),
+(13,3,'2026-07-20',1120.0,'2026-07-19 10:08:00','PAGA'),
+(14,1,'2026-05-20',2700.0,NULL,'CANCELADA'),
+(15,1,'2026-06-18',1040.0,'2026-06-15 15:32:00','PAGA'),
+(15,2,'2026-07-18',1040.0,'2026-07-15 18:10:00','PAGA'),
+(15,3,'2026-08-17',1040.0,'2026-08-16 16:53:00','PAGA'),
+(16,1,'2026-05-23',750.0,'2026-05-23 12:33:00','PAGA'),
+(17,1,'2026-06-10',1000.0,'2026-06-09 10:11:00','PAGA'),
+(17,2,'2026-07-10',1000.0,'2026-07-08 16:05:00','PAGA'),
+(17,3,'2026-07-10',1000.0,NULL,'VENCIDA'),
+(18,1,'2026-05-26',520.0,'2026-05-24 09:57:00','PAGA'),
+(18,2,'2026-06-25',520.0,NULL,'PENDENTE'),
+(19,1,'2026-06-27',960.0,'2026-06-26 18:23:00','PAGA'),
+(19,2,'2026-07-27',960.0,'2026-07-26 18:11:00','PAGA'),
+(19,3,'2026-08-26',960.0,'2026-08-26 16:18:00','PAGA'),
+(20,1,'2026-06-25',1120.0,'2026-06-24 14:24:00','PAGA'),
+(20,2,'2026-07-25',1120.0,'2026-07-23 16:36:00','PAGA'),
+(20,3,'2026-08-24',1120.0,'2026-08-23 16:06:00','PAGA'),
+(21,1,'2026-07-10',1150.0,'2026-07-07 15:13:00','PAGA'),
+(21,2,'2026-08-09',1150.0,'2026-08-07 14:09:00','PAGA'),
+(21,3,'2026-08-09',1150.0,NULL,'PENDENTE'),
+(22,1,'2026-07-25',720.0,'2026-07-22 09:45:00','PAGA'),
+(22,2,'2026-08-24',720.0,NULL,'VENCIDA'),
+(23,1,'2026-08-12',600.0,'2026-08-09 13:20:00','PAGA'),
+(23,2,'2026-09-11',600.0,NULL,'PENDENTE'),
+(24,1,'2026-08-17',2000.0,'2026-08-17 10:04:00','PAGA'),
+(24,2,'2026-09-16',2000.0,'2026-09-14 14:39:00','PAGA'),
+(24,3,'2026-10-16',2000.0,'2026-10-14 15:02:00','PAGA'),
+(25,1,'2026-08-08',840.0,'2026-08-05 14:53:00','PAGA'),
+(25,2,'2026-09-07',840.0,'2026-09-05 14:47:00','PAGA'),
+(25,3,'2026-10-07',840.0,'2026-10-07 09:29:00','PAGA'),
+(26,1,'2026-08-12',1200.0,'2026-08-10 17:20:00','PAGA'),
+(26,2,'2026-09-11',1200.0,'2026-09-11 13:34:00','PAGA'),
+(26,3,'2026-10-11',1200.0,'2026-10-11 09:07:00','PAGA'),
+(27,1,'2026-08-12',1800.0,NULL,'CANCELADA'),
+(28,1,'2026-08-15',1140.0,'2026-08-14 12:04:00','PAGA'),
+(28,2,'2026-09-14',1140.0,'2026-09-12 15:02:00','PAGA'),
+(29,1,'2026-08-13',1200.0,'2026-08-11 09:35:00','PAGA'),
+(29,2,'2026-09-12',1200.0,'2026-09-11 16:32:00','PAGA'),
+(29,3,'2026-10-12',1200.0,'2026-10-12 18:21:00','PAGA'),
+(30,1,'2026-09-16',1200.0,'2026-09-13 10:58:00','PAGA'),
+(30,2,'2026-10-16',1200.0,'2026-10-16 10:03:00','PAGA'),
+(30,3,'2026-11-15',1200.0,NULL,'PENDENTE'),
+(31,1,'2026-09-12',600.0,'2026-09-12 18:45:00','PAGA'),
+(31,2,'2026-10-12',600.0,'2026-10-10 13:16:00','PAGA'),
+(32,1,'2026-10-05',875.0,'2026-10-03 15:04:00','PAGA'),
+(32,2,'2026-11-04',875.0,'2026-11-02 10:22:00','PAGA'),
+(33,1,'2026-10-01',600.0,'2026-09-28 14:47:00','PAGA'),
+(33,2,'2026-10-31',600.0,'2026-10-30 18:40:00','PAGA'),
+(34,1,'2026-10-29',870.0,'2026-10-28 10:03:00','PAGA'),
+(34,2,'2026-11-28',870.0,NULL,'PENDENTE'),
+(35,1,'2026-10-06',840.0,'2026-10-05 14:18:00','PAGA'),
+(36,1,'2026-10-31',1440.0,'2026-10-31 18:51:00','PAGA'),
+(36,2,'2026-11-30',1440.0,NULL,'PENDENTE'),
+(36,3,'2026-12-30',1440.0,NULL,'PENDENTE'),
+(37,1,'2026-10-09',1000.0,'2026-10-08 10:35:00','PAGA'),
+(37,2,'2026-12-24',1000.0,NULL,'PENDENTE'),
+(37,3,'2027-01-23',1000.0,NULL,'PENDENTE'),
+(38,1,'2026-10-29',1080.0,'2026-10-29 13:37:00','PAGA'),
+(38,2,'2026-11-28',1080.0,NULL,'PENDENTE'),
+(39,1,'2026-10-31',1300.0,'2026-10-29 12:56:00','PAGA'),
+(39,2,'2026-11-30',1300.0,NULL,'PENDENTE'),
+(39,3,'2026-12-30',1300.0,NULL,'PENDENTE'),
+(40,1,'2026-10-12',1380.0,'2026-10-12 13:11:00','PAGA'),
+(40,2,'2026-12-31',1380.0,NULL,'PENDENTE'),
+(40,3,'2027-01-30',1380.0,NULL,'PENDENTE'),
+(41,1,'2026-10-15',1300.0,'2026-10-14 16:40:00','PAGA'),
+(41,2,'2027-01-04',1300.0,NULL,'PENDENTE'),
+(41,3,'2027-02-03',1300.0,NULL,'PENDENTE'),
+(42,1,'2026-10-30',1015.0,'2026-10-29 12:41:00','PAGA'),
+(42,2,'2026-11-29',1015.0,NULL,'PENDENTE'),
+(43,1,'2026-11-03',1080.0,'2026-10-31 18:48:00','PAGA'),
+(43,2,'2026-12-03',1080.0,NULL,'PENDENTE'),
+(44,1,'2026-10-18',900.0,'2026-10-17 10:00:00','PAGA'),
+(44,2,'2027-01-14',900.0,NULL,'PENDENTE'),
+(44,3,'2027-02-13',900.0,NULL,'PENDENTE'),
+(45,1,'2026-10-30',3200.0,'2026-10-30 15:33:00','PAGA'),
+(45,2,'2026-11-29',3200.0,NULL,'PENDENTE'),
+(45,3,'2026-12-29',3200.0,NULL,'PENDENTE'),
+(46,1,'2026-11-01',1050.0,'2026-10-30 13:09:00','PAGA'),
+(46,2,'2026-12-01',1050.0,NULL,'PENDENTE'),
+(47,1,'2026-11-01',1170.0,'2026-10-30 16:19:00','PAGA'),
+(47,2,'2026-12-01',1170.0,NULL,'PENDENTE'),
+(48,1,'2026-10-21',700.0,'2026-10-20 10:00:00','PAGA'),
+(48,2,'2027-01-20',700.0,NULL,'PENDENTE'),
+(49,1,'2026-11-02',1840.0,'2026-10-31 18:17:00','PAGA'),
+(49,2,'2026-12-02',1840.0,NULL,'PENDENTE'),
+(49,3,'2027-01-01',1840.0,NULL,'PENDENTE'),
+(50,1,'2026-12-26',1083.33,NULL,'PENDENTE'),
+(50,2,'2027-01-25',1083.33,NULL,'PENDENTE'),
+(50,3,'2027-02-24',1083.34,NULL,'PENDENTE'),
+(51,1,'2026-11-20',2160.0,NULL,'CANCELADA'),
+(52,1,'2027-01-03',1200.0,NULL,'PENDENTE'),
+(52,2,'2027-02-02',1200.0,NULL,'PENDENTE'),
+(52,3,'2027-03-04',1200.0,NULL,'PENDENTE'),
+(53,1,'2027-01-12',760.0,NULL,'PENDENTE'),
+(53,2,'2027-02-11',760.0,NULL,'PENDENTE'),
+(54,1,'2027-01-16',1200.0,NULL,'PENDENTE'),
+(54,2,'2027-02-15',1200.0,NULL,'PENDENTE'),
+(54,3,'2027-03-17',1200.0,NULL,'PENDENTE');
+
+INSERT INTO CONSUMO_SERVICO (id_hospedagem, id_servico, data_hora, quantidade, valor_unitario, observacao) VALUES
+(1,12,'2026-04-05 21:48:00',2,6.0,NULL),
+(2,19,'2026-04-09 01:37:00',3,60.0,NULL),
+(2,9,'2026-04-09 12:46:00',2,80.0,NULL),
+(3,5,'2026-04-09 06:07:00',1,35.0,NULL),
+(4,25,'2026-04-12 21:01:00',2,60.0,NULL),
+(5,21,'2026-04-15 23:41:00',3,25.0,NULL),
+(5,26,'2026-04-17 15:19:00',2,90.0,NULL),
+(5,3,'2026-04-17 21:36:00',2,90.0,NULL),
+(6,4,'2026-04-30 23:56:00',2,25.0,NULL),
+(6,8,'2026-05-03 18:35:00',3,120.0,NULL),
+(6,28,'2026-05-06 03:33:00',2,75.0,NULL),
+(7,7,'2026-05-03 10:29:00',3,30.0,NULL),
+(8,22,'2026-05-07 14:32:00',1,35.0,NULL),
+(8,19,'2026-05-07 15:43:00',1,60.0,NULL),
+(8,20,'2026-05-08 03:01:00',2,40.0,NULL),
+(8,2,'2026-05-08 04:28:00',3,70.0,NULL),
+(9,6,'2026-05-13 12:28:00',3,12.0,NULL),
+(11,5,'2026-05-24 11:15:00',3,35.0,NULL),
+(11,5,'2026-05-24 15:47:00',1,35.0,NULL),
+(12,27,'2026-05-23 12:19:00',2,2.0,NULL),
+(13,21,'2026-05-26 06:33:00',2,25.0,NULL),
+(14,1,'2026-05-25 04:47:00',3,45.0,NULL),
+(14,28,'2026-05-25 12:41:00',1,75.0,NULL),
+(16,15,'2026-06-11 02:59:00',3,95.0,NULL),
+(17,27,'2026-06-19 00:42:00',2,2.0,NULL),
+(18,17,'2026-06-26 12:41:00',2,180.0,NULL),
+(18,25,'2026-06-29 08:26:00',2,60.0,NULL),
+(19,14,'2026-06-29 12:12:00',3,14.0,NULL),
+(19,28,'2026-06-29 21:17:00',3,75.0,NULL),
+(20,16,'2026-07-12 15:51:00',3,110.0,NULL),
+(20,15,'2026-07-13 14:31:00',1,95.0,NULL),
+(20,26,'2026-07-14 20:54:00',3,90.0,NULL),
+(21,24,'2026-07-27 01:38:00',2,130.0,NULL),
+(22,26,'2026-08-08 22:18:00',1,90.0,NULL),
+(23,3,'2026-08-13 21:13:00',1,90.0,NULL),
+(23,14,'2026-08-15 08:24:00',3,14.0,NULL),
+(24,24,'2026-08-14 07:53:00',2,130.0,NULL),
+(24,26,'2026-08-15 13:47:00',2,90.0,NULL),
+(24,15,'2026-08-16 07:36:00',3,95.0,NULL),
+(25,12,'2026-08-14 18:35:00',3,6.0,NULL),
+(25,10,'2026-08-14 20:39:00',1,80.0,NULL),
+(25,18,'2026-08-14 23:18:00',1,200.0,NULL),
+(25,17,'2026-08-15 04:40:00',2,180.0,NULL),
+(25,20,'2026-08-15 13:25:00',3,40.0,NULL),
+(26,6,'2026-08-20 19:53:00',2,12.0,NULL),
+(29,13,'2026-09-17 22:12:00',1,8.0,NULL),
+(29,3,'2026-09-18 04:25:00',2,90.0,NULL),
+(29,25,'2026-09-19 07:05:00',2,60.0,NULL),
+(30,2,'2026-10-03 14:18:00',2,70.0,NULL),
+(30,26,'2026-10-04 12:57:00',2,90.0,NULL),
+(32,23,'2026-10-31 06:23:00',2,150.0,NULL),
+(32,14,'2026-11-02 11:13:00',2,14.0,NULL),
+(32,9,'2026-11-03 18:18:00',3,80.0,NULL),
+(33,19,'2026-10-31 03:14:00',3,60.0,NULL),
+(33,7,'2026-10-31 14:53:00',1,30.0,NULL),
+(34,16,'2026-10-30 20:25:00',2,110.0,NULL),
+(34,5,'2026-10-31 16:42:00',2,35.0,NULL),
+(35,24,'2026-11-02 19:30:00',2,130.0,NULL),
+(35,12,'2026-11-03 09:21:00',2,6.0,NULL),
+(36,5,'2026-11-02 14:44:00',3,35.0,NULL),
+(36,21,'2026-11-03 15:37:00',2,25.0,NULL),
+(37,18,'2026-11-01 04:09:00',1,200.0,NULL),
+(38,25,'2026-11-02 20:39:00',3,60.0,NULL),
+(38,19,'2026-11-04 06:10:00',1,60.0,NULL),
+(39,2,'2026-11-03 04:29:00',3,70.0,NULL),
+(40,24,'2026-11-03 06:49:00',3,130.0,NULL),
+(40,14,'2026-11-03 13:40:00',1,14.0,NULL),
+(41,16,'2026-11-03 22:13:00',1,110.0,NULL);
+
+-- ################################################################
+-- 02_indices.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - Etapa 04
+-- 1. SQL DOS ÍNDICES
+-- Integrantes: Arthur Freire e Luís Melo
+-- Rodar depois do script de criação e inserção (banco hotel_db).
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+-- Chaves primárias, UNIQUE e chaves estrangeiras já têm índice automático
+-- no InnoDB. Os dois índices abaixo cobrem filtros que nenhum desses
+-- índices atende por completo: busca por SITUAÇÃO (status) combinada
+-- com DATA.
+-- ================================================================
+USE hotel_db;
+
+-- ÍNDICE 1: parcelas por situação e vencimento
+-- O financeiro sempre procura parcelas em aberto ('PENDENTE' ou 'VENCIDA')
+-- e compara o vencimento com a data de hoje (atrasada ou a vencer).
+-- PARCELA só tinha índice na chave (id_pagamento, numero_parcela), então
+-- esse filtro lia a tabela inteira. Com (status, data_vencimento) o MySQL
+-- vai direto às parcelas em aberto, já ordenadas por vencimento.
+-- Usado em: visão vw_contas_a_receber e consulta 4 (subconsultas).
+CREATE INDEX idx_parcela_status_vencimento
+    ON PARCELA (status, data_vencimento);
+
+-- ÍNDICE 2: reservas de um hóspede por situação e data de entrada
+-- Na recepção e na cobrança, a pergunta é sempre sobre as reservas de UM
+-- hóspede numa situação: "ele tem reserva futura (PENDENTE/CONFIRMADA)
+-- a partir de hoje?". O índice da FK só tinha o cpf_hospede; com
+-- (cpf_hospede, status, entrada_prevista) o MySQL acha as reservas do
+-- hóspede já filtradas por situação e data, sem ler as outras.
+-- Usado em: consulta 4 (na consulta externa e na subconsulta escalar).
+CREATE INDEX idx_reserva_hospede_status_entrada
+    ON RESERVA (cpf_hospede, status, entrada_prevista);
+
+-- ################################################################
+-- 03_visoes.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - Etapa 04
+-- 3. SQL DAS VISÕES
+-- Integrantes: Arthur Freire e Luís Melo
+-- Rodar depois do script de criação e inserção (banco hotel_db).
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+USE hotel_db;
+
+-- ----------------------------------------------------------------
+-- VISÃO 1: vw_reserva_completa
+-- ----------------------------------------------------------------
+-- Justificativa semântica: para a recepção, uma reserva não é uma linha
+-- da tabela RESERVA, é "quem vem, para qual quarto, quantas diárias,
+-- quanto custa e quanto já pagou". Essas informações estão espalhadas em
+-- 6 tabelas. A visão monta essa ficha completa uma vez só e serve de
+-- base para atendimento e relatórios, sem repetir os joins.
+-- Joins: RESERVA, HOSPEDE, PESSOA, QUARTO, TIPO_QUARTO (INNER JOIN) e
+-- PAGAMENTO (LEFT JOIN: uma reserva recém-criada pode não ter cobrança).
+CREATE OR REPLACE VIEW vw_reserva_completa AS
+SELECT
+    r.id_reserva,
+    r.status                                        AS status_reserva,
+    p.cpf                                           AS cpf_hospede,
+    p.nome                                          AS hospede,
+    q.numero                                        AS quarto,
+    q.andar,
+    tq.nome                                         AS tipo_quarto,
+    r.qtd_hospedes,
+    r.entrada_prevista,
+    r.saida_prevista,
+    DATEDIFF(r.saida_prevista, r.entrada_prevista)  AS diarias,
+    tq.valor_diaria,
+    pg.status                                       AS status_pagamento,
+    COALESCE(pg.valor_total, 0)                     AS valor_total,
+    COALESCE((SELECT SUM(pa.valor)
+                FROM PARCELA pa
+               WHERE pa.id_pagamento = pg.id_pagamento
+                 AND pa.status = 'PAGA'), 0)        AS valor_pago
+FROM RESERVA r
+INNER JOIN HOSPEDE h      ON h.cpf = r.cpf_hospede
+INNER JOIN PESSOA p       ON p.cpf = h.cpf
+INNER JOIN QUARTO q       ON q.numero = r.numero_quarto
+INNER JOIN TIPO_QUARTO tq ON tq.id_tipo = q.id_tipo
+LEFT JOIN PAGAMENTO pg    ON pg.id_reserva = r.id_reserva;
+
+-- ----------------------------------------------------------------
+-- VISÃO 2: vw_contas_a_receber
+-- ----------------------------------------------------------------
+-- Justificativa semântica: é a lista de trabalho do setor financeiro.
+-- Mostra cada parcela ainda não paga, de quem cobrar (nome e e-mail),
+-- a qual reserva e quarto ela se refere e a situação: ATRASADA (o
+-- vencimento já passou) ou A VENCER, com os dias de atraso. O setor
+-- consulta a cobrança sem precisar saber em que tabelas está cada dado.
+-- Joins: PARCELA, PAGAMENTO, RESERVA, PESSOA, QUARTO (INNER JOIN).
+-- Usa o índice idx_parcela_status_vencimento no filtro de status.
+CREATE OR REPLACE VIEW vw_contas_a_receber AS
+SELECT
+    pa.id_pagamento,
+    pa.numero_parcela,
+    r.id_reserva,
+    p.nome                                       AS hospede,
+    p.email,
+    q.numero                                     AS quarto,
+    pg.forma_pagamento,
+    pa.data_vencimento,
+    pa.valor,
+    CASE
+        WHEN pa.data_vencimento < CURRENT_DATE THEN 'ATRASADA'
+        ELSE 'A VENCER'
+    END                                          AS situacao,
+    GREATEST(DATEDIFF(CURRENT_DATE, pa.data_vencimento), 0) AS dias_em_atraso
+FROM PARCELA pa
+INNER JOIN PAGAMENTO pg ON pg.id_pagamento = pa.id_pagamento
+INNER JOIN RESERVA r    ON r.id_reserva = pg.id_reserva
+INNER JOIN PESSOA p     ON p.cpf = r.cpf_hospede
+INNER JOIN QUARTO q     ON q.numero = r.numero_quarto
+WHERE pa.status IN ('PENDENTE', 'VENCIDA');
+
+-- ################################################################
+-- 04_funcoes.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - Etapa 05
+-- 1. SQL DAS FUNÇÕES
+-- Integrantes: Arthur Freire e Luís Melo
+-- Rodar depois do script de criação e inserção (banco hotel_db).
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+USE hotel_db;
+
+DROP FUNCTION IF EXISTS fn_valor_conta;
+DROP FUNCTION IF EXISTS fn_categoria_hospede;
+
+DELIMITER $$
+
+-- ----------------------------------------------------------------
+-- FUNÇÃO 1: fn_valor_conta(id_reserva)
+-- ----------------------------------------------------------------
+-- Justificativa: "quanto essa reserva custa no total?" é a pergunta
+-- mais comum da recepção e do financeiro (no check-out, na cobrança,
+-- nos relatórios). O valor é a soma das diárias (dias x valor da
+-- diária do tipo do quarto) com os serviços consumidos na hospedagem.
+-- Como a regra fica numa função, todo lugar que precisa do total usa
+-- o mesmo cálculo. Retorna NULL se a reserva não existir.
+CREATE FUNCTION fn_valor_conta(p_id_reserva INT)
+RETURNS DECIMAL(10,2)
+READS SQL DATA
+BEGIN
+    DECLARE v_diarias   DECIMAL(10,2);
+    DECLARE v_servicos  DECIMAL(10,2);
+
+    SELECT DATEDIFF(r.saida_prevista, r.entrada_prevista) * tq.valor_diaria
+      INTO v_diarias
+      FROM RESERVA r
+      INNER JOIN QUARTO q       ON q.numero = r.numero_quarto
+      INNER JOIN TIPO_QUARTO tq ON tq.id_tipo = q.id_tipo
+     WHERE r.id_reserva = p_id_reserva;
+
+    SELECT COALESCE(SUM(c.quantidade * c.valor_unitario), 0)
+      INTO v_servicos
+      FROM HOSPEDAGEM h
+      INNER JOIN CONSUMO_SERVICO c ON c.id_hospedagem = h.id_hospedagem
+     WHERE h.id_reserva = p_id_reserva;
+
+    RETURN v_diarias + v_servicos;
+END$$
+
+-- ----------------------------------------------------------------
+-- FUNÇÃO 2: fn_categoria_hospede(cpf)  (usa estrutura condicional)
+-- ----------------------------------------------------------------
+-- Justificativa: o hotel tem programa de fidelidade. A categoria do
+-- hóspede depende de quanto ele já pagou (parcelas PAGA de todas as
+-- reservas dele) e é usada para dar benefícios (upgrade, late checkout)
+-- e para tratamento na recepção. A regra de faixas fica num lugar só:
+--   OURO    pagou R$ 6.000 ou mais
+--   PRATA   pagou de R$ 3.000 a R$ 5.999,99
+--   BRONZE  pagou alguma coisa, abaixo de R$ 3.000
+--   NOVO    ainda não pagou nada (ou não existe como hóspede)
+CREATE FUNCTION fn_categoria_hospede(p_cpf CHAR(11))
+RETURNS VARCHAR(10)
+READS SQL DATA
+BEGIN
+    DECLARE v_total_pago DECIMAL(12,2);
+
+    SELECT COALESCE(SUM(pa.valor), 0)
+      INTO v_total_pago
+      FROM RESERVA r
+      INNER JOIN PAGAMENTO pg ON pg.id_reserva = r.id_reserva
+      INNER JOIN PARCELA pa   ON pa.id_pagamento = pg.id_pagamento
+     WHERE r.cpf_hospede = p_cpf
+       AND pa.status = 'PAGA';
+
+    IF v_total_pago >= 6000 THEN
+        RETURN 'OURO';
+    ELSEIF v_total_pago >= 3000 THEN
+        RETURN 'PRATA';
+    ELSEIF v_total_pago > 0 THEN
+        RETURN 'BRONZE';
+    ELSE
+        RETURN 'NOVO';
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- ################################################################
+-- 05_procedimentos.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - Etapa 05
+-- 2. SQL DOS PROCEDIMENTOS
+-- Integrantes: Arthur Freire e Luís Melo
+-- Rodar depois do script de criação e inserção e do script de funções
+-- (o procedimento 1 usa a função fn_valor_conta).
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+USE hotel_db;
+
+DROP PROCEDURE IF EXISTS sp_realizar_checkout;
+DROP PROCEDURE IF EXISTS sp_registrar_pagamento_hospede;
+
+DELIMITER $$
+
+-- ----------------------------------------------------------------
+-- PROCEDIMENTO 1 (ATUALIZAÇÃO DE DADOS): sp_realizar_checkout
+-- ----------------------------------------------------------------
+-- Justificativa: o check-out mexe em três tabelas ao mesmo tempo e elas
+-- precisam ficar coerentes entre si:
+--   HOSPEDAGEM -> registra a hora de saída e passa para ENCERRADA
+--   RESERVA    -> passa para FINALIZADA
+--   QUARTO     -> passa para LIMPEZA (a governança libera depois)
+-- Tudo roda numa transação: se qualquer UPDATE falhar, nada é gravado.
+-- Antes, o procedimento confere se a hospedagem existe e está ABERTA.
+-- No fim, mostra o resumo com o valor da conta (fn_valor_conta).
+CREATE PROCEDURE sp_realizar_checkout(IN p_id_hospedagem INT)
+BEGIN
+    DECLARE v_status     VARCHAR(20);
+    DECLARE v_id_reserva INT;
+    DECLARE v_quarto     VARCHAR(10);
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    SELECT h.status, h.id_reserva, r.numero_quarto
+      INTO v_status, v_id_reserva, v_quarto
+      FROM HOSPEDAGEM h
+      INNER JOIN RESERVA r ON r.id_reserva = h.id_reserva
+     WHERE h.id_hospedagem = p_id_hospedagem;
+
+    IF v_status IS NULL THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Hospedagem não encontrada.';
+    ELSEIF v_status <> 'ABERTA' THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Check-out já realizado para esta hospedagem.';
+    END IF;
+
+    START TRANSACTION;
+
+    UPDATE HOSPEDAGEM
+       SET checkout_real = NOW(),
+           status = 'ENCERRADA'
+     WHERE id_hospedagem = p_id_hospedagem;
+
+    UPDATE RESERVA
+       SET status = 'FINALIZADA'
+     WHERE id_reserva = v_id_reserva;
+
+    UPDATE QUARTO
+       SET status = 'LIMPEZA'
+     WHERE numero = v_quarto;
+
+    COMMIT;
+
+    SELECT p_id_hospedagem             AS id_hospedagem,
+           v_id_reserva                AS id_reserva,
+           v_quarto                    AS quarto,
+           fn_valor_conta(v_id_reserva) AS valor_conta,
+           'Check-out realizado'       AS mensagem;
+END$$
+
+-- ----------------------------------------------------------------
+-- PROCEDIMENTO 2 (COM CURSOR): sp_registrar_pagamento_hospede
+-- ----------------------------------------------------------------
+-- Justificativa: o hóspede chega no caixa e paga um valor qualquer
+-- (ex.: R$ 2.000). A regra do hotel é quitar as parcelas em aberto
+-- dele da MAIS ANTIGA para a mais nova, uma parcela inteira por vez,
+-- e parar quando o dinheiro não cobre a próxima. O que sobra volta
+-- como saldo (troco ou crédito).
+-- Por que precisa de CURSOR (e não dá com um UPDATE só):
+--   - a decisão de cada parcela depende do SALDO que sobrou depois das
+--     parcelas anteriores, ou seja, as linhas têm que ser processadas
+--     em ordem, uma de cada vez, guardando o saldo numa variável;
+--   - o processo PARA na primeira parcela que o saldo não cobre, mesmo
+--     que parcelas seguintes sejam menores (não se pula a dívida antiga);
+--   - a cada parcela quitada, o status do PAGAMENTO correspondente é
+--     recalculado (PAGO se não sobrou parcela aberta, senão PARCIAL).
+-- Parâmetros: CPF do hóspede, valor entregue; OUT = saldo que sobrou.
+CREATE PROCEDURE sp_registrar_pagamento_hospede(
+    IN  p_cpf   CHAR(11),
+    IN  p_valor DECIMAL(10,2),
+    OUT p_saldo DECIMAL(10,2)
+)
+BEGIN
+    DECLARE v_fim           BOOLEAN DEFAULT FALSE;
+    DECLARE v_id_pagamento  INT;
+    DECLARE v_numero        SMALLINT;
+    DECLARE v_valor_parcela DECIMAL(10,2);
+    DECLARE v_quitadas      INT DEFAULT 0;
+
+    -- parcelas em aberto do hóspede, da mais antiga para a mais nova
+    DECLARE cur_parcelas CURSOR FOR
+        SELECT pa.id_pagamento, pa.numero_parcela, pa.valor
+          FROM PARCELA pa
+          INNER JOIN PAGAMENTO pg ON pg.id_pagamento = pa.id_pagamento
+          INNER JOIN RESERVA r    ON r.id_reserva = pg.id_reserva
+         WHERE r.cpf_hospede = p_cpf
+           AND pa.status IN ('PENDENTE', 'VENCIDA')
+         ORDER BY pa.data_vencimento, pa.id_pagamento, pa.numero_parcela;
+
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_fim = TRUE;
+
+    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+    BEGIN
+        ROLLBACK;
+        RESIGNAL;
+    END;
+
+    IF p_valor IS NULL OR p_valor <= 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'O valor pago deve ser maior que zero.';
+    END IF;
+
+    SET p_saldo = p_valor;
+
+    START TRANSACTION;
+    OPEN cur_parcelas;
+
+    percorre: LOOP
+        FETCH cur_parcelas INTO v_id_pagamento, v_numero, v_valor_parcela;
+        IF v_fim THEN
+            LEAVE percorre;
+        END IF;
+
+        -- o saldo não cobre a parcela mais antiga em aberto: para aqui
+        IF p_saldo < v_valor_parcela THEN
+            LEAVE percorre;
+        END IF;
+
+        UPDATE PARCELA
+           SET status = 'PAGA',
+               data_pagamento = NOW()
+         WHERE id_pagamento = v_id_pagamento
+           AND numero_parcela = v_numero;
+
+        UPDATE PAGAMENTO
+           SET status = IF(EXISTS (SELECT 1 FROM PARCELA x
+                                    WHERE x.id_pagamento = v_id_pagamento
+                                      AND x.status IN ('PENDENTE', 'VENCIDA')),
+                           'PARCIAL', 'PAGO')
+         WHERE id_pagamento = v_id_pagamento;
+
+        SET p_saldo = p_saldo - v_valor_parcela;
+        SET v_quitadas = v_quitadas + 1;
+    END LOOP;
+
+    CLOSE cur_parcelas;
+    COMMIT;
+
+    SELECT p_cpf      AS cpf_hospede,
+           p_valor    AS valor_recebido,
+           v_quitadas AS parcelas_quitadas,
+           p_saldo    AS saldo_restante;
+END$$
+
+DELIMITER ;
+
+-- ################################################################
+-- 06_triggers.sql
+-- ################################################################
+-- ================================================================
+-- Sistema de Gerenciamento de Hotel - Etapa 05
+-- 3. SQL DOS TRIGGERS
+-- Integrantes: Arthur Freire e Luís Melo
+-- Rodar depois do script de criação e inserção (banco hotel_db).
+-- ================================================================
+SET NAMES utf8mb4; -- garante acentos corretos, qualquer que seja o cliente
+USE hotel_db;
+
+DROP TRIGGER IF EXISTS trg_reserva_log_status;
+DROP TRIGGER IF EXISTS trg_reserva_valida_insert;
+DROP TRIGGER IF EXISTS trg_reserva_valida_update;
+DROP TRIGGER IF EXISTS trg_funcionario_supervisor_insert;
+DROP TRIGGER IF EXISTS trg_funcionario_supervisor_update;
+
+-- ----------------------------------------------------------------
+-- Tabela de log usada pelo trigger 1
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS LOG_RESERVA (
+    id_log          INT          PRIMARY KEY AUTO_INCREMENT,
+    id_reserva      INT          NOT NULL,
+    status_anterior VARCHAR(20)  NOT NULL,
+    status_novo     VARCHAR(20)  NOT NULL,
+    data_hora       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    usuario         VARCHAR(100) NOT NULL,
+    CONSTRAINT fk_log_reserva FOREIGN KEY (id_reserva) REFERENCES RESERVA (id_reserva)
+        ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+DELIMITER $$
+
+-- ----------------------------------------------------------------
+-- TRIGGER 1 (ATUALIZA TABELA DE LOG): trg_reserva_log_status
+-- ----------------------------------------------------------------
+-- Justificativa: a situação da reserva decide dinheiro e ocupação
+-- (confirmar, cancelar, fazer check-in, finalizar). Quando há
+-- reclamação ou divergência ("quem cancelou minha reserva?"), o hotel
+-- precisa do histórico. Toda vez que o status de uma reserva muda, o
+-- trigger grava em LOG_RESERVA o status anterior, o novo, a hora e o
+-- usuário do banco que fez a alteração. Funciona para qualquer origem
+-- da mudança: tela, procedimento (ex.: sp_realizar_checkout) ou SQL direto.
+CREATE TRIGGER trg_reserva_log_status
+AFTER UPDATE ON RESERVA
+FOR EACH ROW
+BEGIN
+    IF OLD.status <> NEW.status THEN
+        INSERT INTO LOG_RESERVA (id_reserva, status_anterior, status_novo, usuario)
+        VALUES (NEW.id_reserva, OLD.status, NEW.status, CURRENT_USER());
+    END IF;
+END$$
+
+-- ----------------------------------------------------------------
+-- TRIGGER 2 (REGRA DE NEGÓCIO): trg_reserva_valida_insert
+-- ----------------------------------------------------------------
+-- Justificativa: duas regras básicas de um hotel que as constraints
+-- não conseguem garantir, porque dependem de OUTRAS linhas e tabelas:
+--   1) o número de hóspedes não pode passar da capacidade do tipo do quarto;
+--   2) o quarto não pode ter duas reservas ativas no mesmo período
+--      (overbooking). Reservas CANCELADAS ou FINALIZADAS não contam.
+-- Se alguma regra for violada, o INSERT é recusado com uma mensagem.
+CREATE TRIGGER trg_reserva_valida_insert
+BEFORE INSERT ON RESERVA
+FOR EACH ROW
+BEGIN
+    DECLARE v_capacidade SMALLINT;
+
+    SELECT tq.capacidade
+      INTO v_capacidade
+      FROM QUARTO q
+      INNER JOIN TIPO_QUARTO tq ON tq.id_tipo = q.id_tipo
+     WHERE q.numero = NEW.numero_quarto;
+
+    IF NEW.qtd_hospedes > v_capacidade THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Quantidade de hóspedes maior que a capacidade do quarto.';
+    END IF;
+
+    IF NEW.status IN ('PENDENTE', 'CONFIRMADA', 'EM_HOSPEDAGEM')
+       AND EXISTS (SELECT 1
+                     FROM RESERVA r
+                    WHERE r.numero_quarto = NEW.numero_quarto
+                      AND r.status IN ('PENDENTE', 'CONFIRMADA', 'EM_HOSPEDAGEM')
+                      AND r.entrada_prevista < NEW.saida_prevista
+                      AND r.saida_prevista > NEW.entrada_prevista) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'O quarto já tem reserva ativa nesse período.';
+    END IF;
+END$$
+
+-- ----------------------------------------------------------------
+-- TRIGGER 2b: trg_reserva_valida_update (versão final, Etapa 06)
+-- ----------------------------------------------------------------
+-- A tela de reservas também permite ALTERAR quarto, datas e hóspedes.
+-- Sem esta versão para UPDATE, uma alteração poderia furar as mesmas regras
+-- do trigger 2. A diferença é ignorar a própria reserva (id diferente) na
+-- busca por conflito de período.
+CREATE TRIGGER trg_reserva_valida_update
+BEFORE UPDATE ON RESERVA
+FOR EACH ROW
+BEGIN
+    DECLARE v_capacidade SMALLINT;
+
+    SELECT tq.capacidade
+      INTO v_capacidade
+      FROM QUARTO q
+      INNER JOIN TIPO_QUARTO tq ON tq.id_tipo = q.id_tipo
+     WHERE q.numero = NEW.numero_quarto;
+
+    IF NEW.qtd_hospedes > v_capacidade THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Quantidade de hóspedes maior que a capacidade do quarto.';
+    END IF;
+
+    IF NEW.status IN ('PENDENTE', 'CONFIRMADA', 'EM_HOSPEDAGEM')
+       AND EXISTS (SELECT 1
+                     FROM RESERVA r
+                    WHERE r.numero_quarto = NEW.numero_quarto
+                      AND r.id_reserva <> NEW.id_reserva
+                      AND r.status IN ('PENDENTE', 'CONFIRMADA', 'EM_HOSPEDAGEM')
+                      AND r.entrada_prevista < NEW.saida_prevista
+                      AND r.saida_prevista > NEW.entrada_prevista) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'O quarto já tem reserva ativa nesse período.';
+    END IF;
+END$$
+
+-- ----------------------------------------------------------------
+-- EXTRA (pendência da Etapa 02): funcionário não supervisiona a si mesmo
+-- ----------------------------------------------------------------
+-- O CHECK (cpf_supervisor <> cpf) foi retirado do script de criação
+-- porque o MySQL 8 não aceita CHECK em coluna de FK com ação referencial
+-- (erro 3823). A regra passa a ser garantida por estes dois triggers.
+CREATE TRIGGER trg_funcionario_supervisor_insert
+BEFORE INSERT ON FUNCIONARIO
+FOR EACH ROW
+BEGIN
+    IF NEW.cpf_supervisor = NEW.cpf THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Um funcionário não pode ser supervisor de si mesmo.';
+    END IF;
+END$$
+
+CREATE TRIGGER trg_funcionario_supervisor_update
+BEFORE UPDATE ON FUNCIONARIO
+FOR EACH ROW
+BEGIN
+    IF NEW.cpf_supervisor = NEW.cpf THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Um funcionário não pode ser supervisor de si mesmo.';
+    END IF;
+END$$
+
+DELIMITER ;
+
+-- ----------------------------------------------------------------
+-- Testes
+-- ----------------------------------------------------------------
+-- Trigger 1: cancelar uma reserva e ver o log
+-- UPDATE RESERVA SET status = 'CANCELADA' WHERE id_reserva = 54;
+-- SELECT * FROM LOG_RESERVA;
+
+-- Trigger 2: reserva para 5 pessoas num quarto de solteiro (recusada)
+-- INSERT INTO RESERVA (cpf_hospede, numero_quarto, entrada_prevista, saida_prevista, qtd_hospedes, status)
+-- VALUES ('10000000001', '101', '2027-02-01', '2027-02-03', 5, 'PENDENTE');
+
+-- Trigger 2: quarto 115 já reservado de 16/11 a 20/11/2026 (reserva 35)
+-- Recusada (choca com o período):
+-- INSERT INTO RESERVA (cpf_hospede, numero_quarto, entrada_prevista, saida_prevista, qtd_hospedes, status)
+-- VALUES ('10000000001', '115', '2026-11-18', '2026-11-22', 1, 'PENDENTE');
+-- Aceita (entra no dia em que o outro hóspede sai):
+-- INSERT INTO RESERVA (cpf_hospede, numero_quarto, entrada_prevista, saida_prevista, qtd_hospedes, status)
+-- VALUES ('10000000001', '115', '2026-11-20', '2026-11-22', 1, 'PENDENTE');
+
+-- Extra: funcionário como supervisor de si mesmo (recusado)
+-- UPDATE FUNCIONARIO SET cpf_supervisor = cpf WHERE cpf = '20000000006';

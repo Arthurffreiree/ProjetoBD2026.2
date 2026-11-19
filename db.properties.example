@@ -1,0 +1,4 @@
+# Copie este arquivo para db.properties (na raiz do projeto) e ajuste usuário e senha.
+db.url=jdbc:mysql://localhost:3306/hotel_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=America/Recife
+db.user=root
+db.password=sua_senha

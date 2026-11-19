@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aurora Hotel | Painel de Gestão</title>
+    <link rel="stylesheet" href="/styles.css">
+    <!-- Chart.js fica dentro do projeto (vendor), então funciona sem internet -->
+    <script src="/vendor/chart.umd.js" defer></script>
+    <script src="/js/app.js" defer></script>
+    <script src="/js/dashboard.js" defer></script>
+    <script src="/js/cadastros.js" defer></script>
+    <script src="/js/consultas.js" defer></script>
+    <script src="/js/rotinas.js" defer></script>
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar" aria-label="Navegação principal">
+        <div class="brand">
+            <div class="brand-mark" aria-hidden="true">A</div>
+            <div>
+                <strong>Aurora</strong>
+                <span>Hotel & Gestão</span>
+            </div>
+        </div>
+
+        <nav class="nav-list">
+            <button class="nav-item active" data-view="dashboard">
+                <span class="nav-icon">⌂</span><span>Dashboard</span>
+            </button>
+            <button class="nav-item" data-view="cadastros">
+                <span class="nav-icon">▦</span><span>Cadastros</span>
+            </button>
+            <button class="nav-item" data-view="consultas">
+                <span class="nav-icon">⌁</span><span>Consultas e visões</span>
+            </button>
+            <button class="nav-item" data-view="rotinas">
+                <span class="nav-icon">ƒ</span><span>Funções e triggers</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div id="connectionBadge" class="connection-badge checking">
+                <span></span> Verificando MySQL
+            </div>
+            <small>Versão final · Etapa 06</small>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="topbar">
+            <button id="menuButton" class="menu-button" aria-label="Abrir menu">☰</button>
+            <div>
+                <p class="eyebrow">Sistema de gerenciamento</p>
+                <h1 id="pageTitle">Dashboard</h1>
+            </div>
+            <div class="team-chip">
+                <span>AF</span>
+                <div><strong>Arthur e Luís</strong><small>Administração</small></div>
+            </div>
+        </header>
+
+        <!-- ============================== DASHBOARD ============================== -->
+        <section id="dashboard" class="view active">
+            <div class="panel filter-bar">
+                <label>De<input id="filtroDe" type="date" value="2026-01-01"></label>
+                <label>Até<input id="filtroAte" type="date" value="2027-12-31"></label>
+                <label>Tipo de quarto<select id="filtroTipo"><option value="0">Todos os tipos</option></select></label>
+                <div class="preset-group" aria-label="Períodos prontos">
+                    <button class="chip" data-preset="tudo">Tudo</button>
+                    <button class="chip" data-preset="s1">1º sem. 2026</button>
+                    <button class="chip" data-preset="s2">2º sem. 2026</button>
+                    <button class="chip" data-preset="futuro">A partir de hoje</button>
+                </div>
+                <button class="button primary" id="aplicarFiltro">Aplicar</button>
+            </div>
+            <p class="filter-note">O período filtra pela <b>data de entrada</b> das reservas (receita e serviços: pela data do pagamento e do consumo). Clique numa barra do gráfico "Reservas por tipo" para filtrar por aquele tipo.</p>
+
+            <div class="metric-grid">
+                <article class="metric-card navy"><span class="metric-label">Reservas no período</span><strong id="mReservas">—</strong><small id="mReservasSub">&nbsp;</small></article>
+                <article class="metric-card teal"><span class="metric-label">Receita recebida</span><strong id="mReceita">—</strong><small id="mReceitaSub">&nbsp;</small></article>
+                <article class="metric-card amber"><span class="metric-label">Ticket médio</span><strong id="mTicket">—</strong><small id="mTicketSub">&nbsp;</small></article>
+                <article class="metric-card coral"><span class="metric-label">Ocupação atual</span><strong id="mOcupacao">—</strong><small id="mOcupacaoSub">&nbsp;</small></article>
+            </div>
+
+            <article class="panel stats-panel">
+                <div class="panel-heading">
+                    <div><h3>Estatística descritiva do valor das reservas</h3><p>Calculada no MySQL sobre as reservas não canceladas do filtro</p></div>
+                </div>
+                <div class="stats-grid" id="statsGrid"></div>
+            </article>
+
+            <div class="chart-grid">
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Reservas por status</h3><p>Distribuição de frequência (rosca)</p></div></div>
+                    <div class="chart-box"><canvas id="chStatus"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Distribuição do valor das reservas</h3><p>Histograma por faixa de R$ 1 mil</p></div></div>
+                    <div class="chart-box"><canvas id="chHistograma"></canvas></div>
+                </article>
+                <article class="panel chart-panel wide">
+                    <div class="panel-heading"><div><h3>Tendência mensal</h3><p>Receita recebida (linha) e reservas por mês de entrada (barras)</p></div></div>
+                    <div class="chart-box tall"><canvas id="chTendencia"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Reservas por tipo de quarto</h3><p>10 tipos com mais reservas (clique para filtrar)</p></div></div>
+                    <div class="chart-box"><canvas id="chTipos"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Correlação: noites × valor</h3><p id="chDispersaoSub">Cada ponto é uma reserva</p></div></div>
+                    <div class="chart-box"><canvas id="chDispersao"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Serviços com maior receita</h3><p>Consumos dentro do período</p></div></div>
+                    <div class="chart-box"><canvas id="chServicos"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Entradas por dia da semana</h3><p>Radar: em que dias os hóspedes chegam</p></div></div>
+                    <div class="chart-box"><canvas id="chSemana"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Formas de pagamento</h3><p>Participação no valor das reservas (pizza)</p></div></div>
+                    <div class="chart-box"><canvas id="chFormas"></canvas></div>
+                </article>
+                <article class="panel chart-panel">
+                    <div class="panel-heading"><div><h3>Mais indicadores</h3><p>Resumo do período e do hotel</p></div></div>
+                    <div class="mini-metrics" id="miniMetrics"></div>
+                </article>
+            </div>
+
+            <article class="panel">
+                <div class="panel-heading"><div><h3>Reservas recentes</h3><p>Últimas reservas criadas dentro do filtro</p></div></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>ID</th><th>Hóspede</th><th>Quarto</th><th>Entrada</th><th>Saída</th><th>Status</th></tr></thead>
+                        <tbody id="recentReservations"></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ============================== CADASTROS ============================== -->
+        <section id="cadastros" class="view">
+            <div class="section-heading">
+                <div><h2>Cadastros</h2><p>Inserção, alteração, exclusão e visualização de 4 tabelas.</p></div>
+                <button class="button primary" id="novoRegistro">Novo registro</button>
+            </div>
+
+            <div class="tabs" role="tablist" id="crudTabs">
+                <button class="tab active" data-entity="quartos">Quartos</button>
+                <button class="tab" data-entity="servicos">Serviços</button>
+                <button class="tab" data-entity="tipos">Tipos de quarto</button>
+                <button class="tab" data-entity="reservas">Reservas</button>
+            </div>
+            <p class="filter-note" id="crudNote"></p>
+
+            <form id="crudForm" class="panel edit-form hidden">
+                <div class="panel-heading">
+                    <div><h3 id="crudFormTitle">Novo registro</h3><p>Preencha os dados obrigatórios.</p></div>
+                    <button type="button" class="icon-button" id="crudFechar" aria-label="Fechar">×</button>
+                </div>
+                <div class="form-grid four" id="crudCampos"></div>
+                <div class="form-actions">
+                    <button type="button" class="button ghost" id="crudCancelar">Cancelar</button>
+                    <button type="submit" class="button primary">Salvar</button>
+                </div>
+            </form>
+
+            <article class="panel">
+                <div class="panel-heading table-tools">
+                    <div><h3 id="crudTitulo">Registros</h3><p id="crudContagem">Carregando...</p></div>
+                    <input id="crudBusca" class="search" type="search" placeholder="Buscar">
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead id="crudHead"></thead>
+                        <tbody id="crudBody"></tbody>
+                    </table>
+                </div>
+            </article>
+        </section>
+
+        <!-- ============================== CONSULTAS ============================== -->
+        <section id="consultas" class="view">
+            <div class="section-heading">
+                <div><h2>Consultas e visões</h2><p>As 13 consultas das Etapas 03 e 04 e as 2 visões, executadas com SQL explícito no MySQL.</p></div>
+            </div>
+
+            <div class="query-layout">
+                <div class="query-list" id="queryList"><p class="query-loading">Carregando consultas...</p></div>
+
+                <article class="panel query-result-panel">
+                    <div class="panel-heading">
+                        <div>
+                            <h3 id="queryTitle">Consultas</h3>
+                            <p id="queryDescription">Selecione uma consulta.</p>
+                            <p class="query-concepts" id="queryConcepts"></p>
+                        </div>
+                        <button id="runQuery" class="button primary">Executar</button>
+                    </div>
+                    <form id="queryFilters" class="query-filters hidden"></form>
+                    <div class="query-kpis" id="queryKpis"></div>
+                    <div class="chart-box query-chart hidden" id="queryChartBox"><canvas id="queryChart"></canvas></div>
+                    <div class="table-wrap query-table-wrap">
+                        <table id="queryTable"><thead></thead><tbody></tbody></table>
+                    </div>
+                    <details class="sql-box">
+                        <summary>Ver SQL executado</summary>
+                        <pre id="querySql"></pre>
+                    </details>
+                </article>
+            </div>
+        </section>
+
+        <!-- ============================== ROTINAS ============================== -->
+        <section id="rotinas" class="view">
+            <div class="section-heading">
+                <div><h2>Funções, procedimentos e triggers</h2><p>Rotinas da Etapa 05 executadas direto no banco, com o efeito visível na tela.</p></div>
+            </div>
+
+            <div class="chart-grid">
+                <article class="panel">
+                    <div class="panel-heading">
+                        <div><h3>Função fn_categoria_hospede</h3><p>Categoria de fidelidade pelo total já pago (IF / ELSEIF)</p></div>
+                    </div>
+                    <div class="chart-box short"><canvas id="chCategorias"></canvas></div>
+                    <div class="table-wrap small-table">
+                        <table><thead><tr><th>Hóspede</th><th>Total pago</th><th>Categoria</th></tr></thead><tbody id="tbCategorias"></tbody></table>
+                    </div>
+                </article>
+
+                <article class="panel">
+                    <div class="panel-heading">
+                        <div><h3>Procedimento sp_registrar_pagamento_hospede</h3><p>Usa CURSOR: quita as parcelas da mais antiga para a mais nova até o dinheiro acabar</p></div>
+                    </div>
+                    <form id="pagamentoForm" class="query-filters">
+                        <label>Hóspede<select name="cpf" id="pgHospede" required></select></label>
+                        <label>Valor pago (R$)<input name="valor" type="number" min="0.01" step="0.01" value="1000" required></label>
+                        <button type="submit" class="button primary">Registrar pagamento</button>
+                    </form>
+                    <div class="result-box hidden" id="pgResultado"></div>
+                    <div class="table-wrap small-table">
+                        <table><thead><tr><th>Reserva</th><th>Parcela</th><th>Vencimento</th><th>Valor</th><th>Situação</th><th>Pagamento</th></tr></thead><tbody id="tbParcelas"></tbody></table>
+                    </div>
+                </article>
+
+                <article class="panel wide">
+                    <div class="panel-heading">
+                        <div><h3>Função fn_valor_conta + procedimento sp_realizar_checkout</h3><p>Hospedagens em andamento com o valor da conta (diárias + serviços). O check-out encerra a hospedagem, finaliza a reserva e põe o quarto em LIMPEZA numa transação.</p></div>
+                    </div>
+                    <div class="table-wrap">
+                        <table><thead><tr><th>Hospedagem</th><th>Hóspede</th><th>Quarto</th><th>Check-in</th><th>Saída prevista</th><th>Valor da conta</th><th>Ação</th></tr></thead><tbody id="tbHospedagens"></tbody></table>
+                    </div>
+                </article>
+
+                <article class="panel wide">
+                    <div class="panel-heading">
+                        <div><h3>Triggers de RESERVA e tabela LOG_RESERVA</h3><p>trg_reserva_log_status grava cada mudança de status; trg_reserva_valida_insert/update recusam capacidade excedida e overbooking.</p></div>
+                        <div class="button-row">
+                            <button class="button secondary" id="testeCapacidade">Testar capacidade</button>
+                            <button class="button secondary" id="testeOverbooking">Testar overbooking</button>
+                            <button class="button ghost" id="atualizarLog">Atualizar log</button>
+                        </div>
+                    </div>
+                    <div class="result-box hidden" id="triggerResultado"></div>
+                    <div class="table-wrap">
+                        <table><thead><tr><th>Log</th><th>Reserva</th><th>Hóspede</th><th>Status anterior</th><th>Status novo</th><th>Data e hora</th><th>Usuário</th></tr></thead><tbody id="tbLog"></tbody></table>
+                    </div>
+                </article>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="confirmDialog" class="dialog-backdrop hidden">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="dialog-symbol">!</div>
+        <h3 id="confirmTitle">Confirmar</h3>
+        <p id="confirmMessage">Tem certeza?</p>
+        <div class="dialog-actions">
+            <button id="confirmCancel" class="button ghost">Cancelar</button>
+            <button id="confirmOk" class="button danger">Confirmar</button>
+        </div>
+    </div>
+</div>
+</body>
+</html>
